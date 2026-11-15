@@ -1,0 +1,4 @@
+-I../../../../../Repos/API/ScriptHookV_SDK_1.0.617/inc
+-DWIN32_LEAN_AND_MEAN
+-DNOMINMAX
+-DPLUGIN_VERSION=0.0.0

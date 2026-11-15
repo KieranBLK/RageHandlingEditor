@@ -1,0 +1,44 @@
+# Formatter settings for every script's C++ source, matched to the project's source style rules and the C# side's .editorconfig
+BasedOnStyle: Microsoft
+Language: Cpp
+IndentWidth: 4
+UseTab: Never
+LineEnding: LF
+# No column limit, so a statement is never wrapped to fit a width
+ColumnLimit: 0
+# Allman braces, except a lambda's body stays on its own line
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterExternBlock: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+  AfterUnion: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: false
+  BeforeWhile: false
+  IndentBraces: false
+  SplitEmptyFunction: true
+  SplitEmptyRecord: true
+  SplitEmptyNamespace: true
+# A single-statement body rides its keyword line, and short functions, lambdas, loops, and case labels stay on one line
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortBlocksOnASingleLine: Always
+AllowShortFunctionsOnASingleLine: All
+AllowShortLambdasOnASingleLine: All
+AllowShortLoopsOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: true
+IndentCaseLabels: true
+# The pointer and reference marks sit on the type, and a braced list keeps a space inside each brace
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+Cpp11BracedListStyle: false
+# Windows headers depend on their include order, and comments keep their own line breaks
+SortIncludes: Never
+ReflowComments: Never
+MaxEmptyLinesToKeep: 1

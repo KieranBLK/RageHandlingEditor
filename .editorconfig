@@ -1,0 +1,87 @@
+# Formatter and analyzer settings for every script's C# source, matched to the project's source style rules
+# Every C# source file ends its lines with LF, so the formatter writes LF and flags a CRLF line
+root = true
+
+[*.cs]
+indent_style = space
+indent_size = 4
+tab_width = 4
+trim_trailing_whitespace = true
+end_of_line = lf
+
+# Allman braces, and a one-line statement or block stays on its line
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_preserve_single_line_statements = true
+csharp_preserve_single_line_blocks = true
+
+# Initializer members pack onto one line, and a case's own block brace sits at the case label's indent
+csharp_new_line_before_members_in_object_initializers = false
+csharp_new_line_before_members_in_anonymous_types = false
+csharp_indent_case_contents_when_block = false
+
+# Declaration spacing is left alone, so hand-aligned const blocks keep their columns
+csharp_space_around_declaration_statements = ignore
+csharp_space_around_binary_operators = before_and_after
+csharp_space_after_comma = true
+csharp_space_before_comma = false
+csharp_space_after_keywords_in_control_flow_statements = true
+csharp_space_after_cast = false
+csharp_space_after_semicolon_in_for_statement = true
+csharp_space_between_parentheses = false
+csharp_space_between_method_call_parameter_list_parentheses = false
+csharp_space_between_method_declaration_parameter_list_parentheses = false
+
+csharp_indent_block_contents = true
+csharp_indent_braces = false
+csharp_indent_case_contents = true
+csharp_indent_switch_labels = true
+
+dotnet_style_require_accessibility_modifiers = for_non_interface_members
+dotnet_code_quality_unused_parameters = all
+
+# Every analyzer starts off, and only the rules below are turned on
+dotnet_analyzer_diagnostic.severity = none
+
+# Built-in: Unused using, explicit accessibility, unused or unread private member, formatting, unused parameter, naming
+dotnet_diagnostic.IDE0005.severity = warning
+dotnet_diagnostic.IDE0040.severity = warning
+dotnet_diagnostic.IDE0051.severity = warning
+dotnet_diagnostic.IDE0052.severity = warning
+dotnet_diagnostic.IDE0055.severity = warning
+dotnet_diagnostic.IDE0060.severity = warning
+dotnet_diagnostic.IDE1006.severity = warning
+
+# StyleCop: Spacing, a space after //, trailing whitespace, built-in type names, naming, blank lines
+dotnet_diagnostic.SA1000.severity = warning
+dotnet_diagnostic.SA1001.severity = warning
+dotnet_diagnostic.SA1003.severity = warning
+dotnet_diagnostic.SA1005.severity = warning
+dotnet_diagnostic.SA1008.severity = warning
+dotnet_diagnostic.SA1009.severity = warning
+dotnet_diagnostic.SA1028.severity = warning
+dotnet_diagnostic.SA1121.severity = warning
+dotnet_diagnostic.SA1300.severity = warning
+dotnet_diagnostic.SA1303.severity = warning
+dotnet_diagnostic.SA1309.severity = warning
+dotnet_diagnostic.SA1312.severity = warning
+dotnet_diagnostic.SA1313.severity = warning
+dotnet_diagnostic.SA1505.severity = warning
+dotnet_diagnostic.SA1507.severity = warning
+dotnet_diagnostic.SA1508.severity = warning
+dotnet_diagnostic.SA1517.severity = warning
+
+# Roslynator: Redundant boolean literal, unused member
+# RCS1163 (unused parameter) stays off: It flags parameters a delegate's signature requires, which IDE0060 already tells apart
+dotnet_diagnostic.RCS1033.severity = warning
+dotnet_diagnostic.RCS1213.severity = warning
+
+# Naming: Methods PascalCase. Fields have no naming rule here, since INI key consts (KEY_CTL_MenuActionModifier) and static readonly
+# colors and tables each follow their own convention. SA1309 and the project linter catch a leading underscore
+dotnet_naming_rule.methods_pascal_case.symbols = methods
+dotnet_naming_rule.methods_pascal_case.style = pascal_case_no_prefix
+dotnet_naming_rule.methods_pascal_case.severity = warning
+dotnet_naming_symbols.methods.applicable_kinds = method
+dotnet_naming_style.pascal_case_no_prefix.capitalization = pascal_case
