@@ -55,16 +55,15 @@ namespace RHE
             public FieldEntry[] Fields;
             // Rows that sit beside the category's table but are not part of its data object (Weapon's base-level damage scale)
             public FieldEntry[] ExtraFields = new FieldEntry[0];
-            // The vehicle types a live creation is allowed on, which are the ones whose game code reads the category, or null for any type
-            // Any other type stays export-only, since the game would read the new object as the wrong kind
-            public VehicleType[] LiveAllowedTypes;
             // The vehicle types whose game code reads the category unguarded, so a delete only excludes it from the save
             public VehicleType[] RequiredTypes;
             public string[] RequiredModelNames;
             // The model hashes of RequiredModelNames, set when the definitions are built, or null with no names
             public HashSet<int> RequiredModelHashes;
-            // The vehicle types an export-only creation is offered on, or null for any type
+            // The vehicle types phantom and live creation is allowed on, or null for any type
             public VehicleType[] CandidateTypes;
+            // Candidate types the category is created and deleted on only as phantom, never live, or null for none
+            public VehicleType[] PhantomOnlyTypes;
             // An off-road car is offered the category too, for an off-road car made amphibious
             public bool OfferedOnOffRoadCars;
             public CreationEffect CreationEffect;
@@ -128,7 +127,6 @@ namespace RHE
                     LongName = "CarHandlingData",
                     XmlType = "CCarHandlingData",
                     PluginCategory = PluginCategory.Car,
-                    LiveAllowedTypes = new[] { VehicleType.Automobile, VehicleType.QuadBike, VehicleType.SubmarineCar, VehicleType.AmphibiousAutomobile, VehicleType.AmphibiousQuadBike },
                     // The Viseris and the tuner vehicles write into their Car data when they initialize physics, so it can never be removed from them
                     RequiredModelNames = new[]
                     {
@@ -145,7 +143,6 @@ namespace RHE
                     LongName = "BikeHandlingData",
                     XmlType = "CBikeHandlingData",
                     PluginCategory = PluginCategory.Bike,
-                    LiveAllowedTypes = new[] { VehicleType.Motorcycle, VehicleType.Bicycle, VehicleType.QuadBike, VehicleType.AmphibiousQuadBike },
                     RequiredTypes = new[] { VehicleType.Motorcycle, VehicleType.Bicycle },
                     CandidateTypes = new[] { VehicleType.Motorcycle, VehicleType.Bicycle, VehicleType.QuadBike, VehicleType.AmphibiousQuadBike },
                     CreationEffect = CreationEffect.Live
@@ -156,10 +153,10 @@ namespace RHE
                     LongName = "FlyingHandlingData",
                     XmlType = "CFlyingHandlingData",
                     PluginCategory = PluginCategory.Flying,
-                    LiveAllowedTypes = new[] { VehicleType.Plane, VehicleType.Helicopter, VehicleType.Blimp },
-                    RequiredTypes = new[] { VehicleType.Plane, VehicleType.Helicopter },
+                    // Helicopters and blimps require this category otherwise they crash the game once they touch water
+                    RequiredTypes = new[] { VehicleType.Helicopter, VehicleType.Blimp },
                     CandidateTypes = new[] { VehicleType.Plane, VehicleType.Helicopter, VehicleType.Blimp },
-                    CreationEffect = CreationEffect.ModelLoad
+                    CreationEffect = CreationEffect.Live
                 },
                 new CategoryDefinition<FlyingHandlingData>(FlyingFields, h => h.VerticalFlyingHandlingData, () => BuildDefaultFlyingHandlingXml(true))
                 {
@@ -168,9 +165,8 @@ namespace RHE
                     XmlType = "CFlyingHandlingData",
                     IsVerticalFlying = true,
                     PluginCategory = PluginCategory.VerticalFlying,
-                    LiveAllowedTypes = new[] { VehicleType.Plane, VehicleType.Helicopter, VehicleType.Blimp },
                     CandidateTypes = new[] { VehicleType.Plane, VehicleType.Helicopter, VehicleType.Blimp },
-                    CreationEffect = CreationEffect.ModelLoad
+                    CreationEffect = CreationEffect.Live
                 },
                 new CategoryDefinition<SpecialFlightHandlingData>(SpecialFlightFields, h => h.SpecialFlightHandlingData, BuildDefaultSpecialFlightHandlingXml)
                 {
@@ -178,8 +174,7 @@ namespace RHE
                     LongName = "SpecialFlightHandlingData",
                     XmlType = "CSpecialFlightHandlingData",
                     PluginCategory = PluginCategory.SpecialFlight,
-                    LiveAllowedTypes = new[] { VehicleType.Automobile, VehicleType.AmphibiousAutomobile, VehicleType.AmphibiousQuadBike },
-                    CandidateTypes = new[] { VehicleType.Automobile, VehicleType.AmphibiousAutomobile, VehicleType.AmphibiousQuadBike },
+                    CandidateTypes = new[] { VehicleType.Automobile, VehicleType.AmphibiousAutomobile, VehicleType.Motorcycle, VehicleType.Bicycle, VehicleType.QuadBike, VehicleType.AmphibiousQuadBike },
                     CreationEffect = CreationEffect.Live,
                     FlagsMenu = BuildFlagsFacts("SpecialFlightFlags", "Flags")
                 },
@@ -189,7 +184,6 @@ namespace RHE
                     LongName = "BoatHandlingData",
                     XmlType = "CBoatHandlingData",
                     PluginCategory = PluginCategory.Boat,
-                    LiveAllowedTypes = new[] { VehicleType.Boat, VehicleType.AmphibiousAutomobile, VehicleType.AmphibiousQuadBike },
                     RequiredTypes = new[] { VehicleType.Boat, VehicleType.AmphibiousAutomobile, VehicleType.AmphibiousQuadBike },
                     CandidateTypes = new[] { VehicleType.Boat, VehicleType.AmphibiousAutomobile, VehicleType.AmphibiousQuadBike },
                     OfferedOnOffRoadCars = true,
@@ -201,8 +195,10 @@ namespace RHE
                     LongName = "SeaPlaneHandlingData",
                     XmlType = "CSeaPlaneHandlingData",
                     PluginCategory = PluginCategory.SeaPlane,
-                    LiveAllowedTypes = new[] { VehicleType.Plane },
-                    CandidateTypes = new[] { VehicleType.Plane },
+                    CandidateTypes = new[] { VehicleType.Plane, VehicleType.Helicopter },
+                    // A helicopter gets its seaplane state only when it spawns with SeaPlane data, and its physics reads that state unchecked whenever the data exists
+                    // So SeaPlane created live on a helicopter spawned without it, an undo of a live delete included, crashes the game on the next frame
+                    PhantomOnlyTypes = new[] { VehicleType.Helicopter },
                     CreationEffect = CreationEffect.ModelLoad
                 },
                 new CategoryDefinition<SubmarineHandlingData>(SubmarineFields, h => h.SubmarineHandlingData, null)
@@ -211,7 +207,6 @@ namespace RHE
                     LongName = "SubmarineHandlingData",
                     XmlType = "CSubmarineHandlingData",
                     PluginCategory = PluginCategory.Submarine,
-                    LiveAllowedTypes = new[] { VehicleType.Submarine, VehicleType.SubmarineCar },
                     CandidateTypes = new[] { VehicleType.SubmarineCar, VehicleType.Submarine },
                     CreationEffect = CreationEffect.ModelLoad
                 },
@@ -221,7 +216,6 @@ namespace RHE
                     LongName = "TrailerHandlingData",
                     XmlType = "CTrailerHandlingData",
                     PluginCategory = PluginCategory.Trailer,
-                    LiveAllowedTypes = new[] { VehicleType.Trailer },
                     CandidateTypes = new[] { VehicleType.Trailer },
                     CreationEffect = CreationEffect.Respawn
                 },

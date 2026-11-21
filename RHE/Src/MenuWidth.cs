@@ -239,12 +239,14 @@ namespace RHE
         }
 
         // The API's hardcoded offset only approximates center at the baseline width, and animated widths drift from it
+        // The position setter recalculates the text, so a text already centered is left alone, which a settled width calls every tick
         private void RecenterBannerText(NativeMenu menu)
         {
             if (menu.BannerText == null || menu.Banner == null) return;
-            PointF bannerPosition = menu.Banner.Position;
             PointF textPosition = menu.BannerText.Position;
-            menu.BannerText.Position = new PointF(bannerPosition.X + menu.Width / 2.0f, textPosition.Y);
+            float centeredX = menu.Banner.Position.X + menu.Width / 2.0f;
+            if (textPosition.X == centeredX) return;
+            menu.BannerText.Position = new PointF(centeredX, textPosition.Y);
         }
     }
 }

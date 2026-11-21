@@ -92,9 +92,9 @@ namespace RHE
             };
         }
 
-        private FieldStore<float> BuildLiveFloatStore(NativeDynamicItem<DisplayFloat> item, string category, FieldEntry entry, Func<HandlingData, float> getter, FieldSetter<float> setter, EditorContext owner, string fieldKeyOverride, TrackedItemDescription trackedDescription)
+        private FieldStore<float> BuildLiveFloatStore(NativeDynamicItem<DisplayFloat> item, string category, FieldEntry entry, Func<HandlingData, float> getter, FieldSetter<float> setter, EditorContext owner, string fieldKeyOverride, string baseDescription)
         {
-            var binding = new FloatFieldBinding { Item = item, Getter = getter, Setter = setter, Owner = owner, DescriptionPrefix = entry.DescriptionPrefix, TrackedDescription = trackedDescription };
+            var binding = new FloatFieldBinding { Item = item, Getter = getter, Setter = setter, Owner = owner, DescriptionPrefix = entry.DescriptionPrefix, BaseDescription = baseDescription };
             string fieldKey = RegisterLiveFieldBinding(item, category, entry, owner, fieldKeyOverride, binding, floatBindingByItem, floatFieldBindingsByOwner, floatBindingByFieldKey);
             fieldRegistry[fieldKey] = (vehicle, text) =>
             {

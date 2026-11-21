@@ -37,7 +37,7 @@ namespace RHE
             public NativeDynamicItem<DisplayFloat> WeaponDamageScaledToVehHealthMultItem;
         }
 
-        // phantomSyncActionsByMenu and phantomMenuSelectedIndex (SubDataCreation.cs) stay single shared dictionaries keyed by menu instance
+        // phantomSyncActionsByMenu and phantomMenuSelectedIndex (StaticSubData.cs) stay single shared dictionaries keyed by menu instance
         // Every tree's phantom menus are distinct objects, so one shared dictionary partitions correctly across all trees with no risk of collision
         private class PhantomState
         {
@@ -126,7 +126,8 @@ namespace RHE
             // The vehicles the field sync and the drift reassertion last ran against, so each resets when the tree's vehicle changes
             public Vehicle LastSyncedVehicle;
             public Vehicle LastReassertedVehicle;
-            // The collider state last logged for LastReassertedVehicle, so the center of gravity reassert logs once per change
+            // The collider state last logged for LastReassertedVehicle while its centers disagree, so the reassert logs once per change
+            // Unknown while they agree, so the next mismatch logs its state fresh
             public ColliderState LastColliderState;
             // The menu of this tree that is visible, set by the MenuState stage and null while none is
             public NativeMenu VisibleMenuThisTick;

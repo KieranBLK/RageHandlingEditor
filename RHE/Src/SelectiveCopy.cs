@@ -70,7 +70,7 @@ namespace RHE
             return new SelectiveCopyRun { Target = target, Vehicle = vehicle, Handling = vehicle.HandlingData, HandlingKey = ResolveHandlingKey(vehicle) };
         }
 
-        // A category the vehicle lacks is created first, live when the allow list accepts it and otherwise as an export-only category
+        // A category the vehicle lacks is created first, live when live creation is offered on the vehicle's type and otherwise as a phantom category
         // Returns False for a category the vehicle cannot hold at all, and the copy then reports it missing
         private bool EnsureCopyCategoryExists(SelectiveCopyRun run, string category)
         {

@@ -32,27 +32,32 @@ namespace RHE
         // Ticks between pending-unload checks
         private const int UNLOAD_POLL_INTERVAL = 1;
         // Game milliseconds the model must stay unloaded before an unload whose fragment was not evicted ends
-        // It is the eviction's retry window, and without the plugin the wait that gives the game a chance to drop the fragment itself
-        private const int UNLOAD_SETTLE_MS = 8000;
+        // It's the eviction's retry window, and without the plugin the wait that gives the game a chance to drop the fragment itself
+        private const int UNLOAD_SETTLE_MS = 10000;
         // Game milliseconds from the confirm within which the eviction and the model reload must finish for the vehicle to respawn on its own
         // Past it the player has likely moved on, so the unload ends with the notification asking for a manual respawn
         private const int UNLOAD_AUTO_RESPAWN_WINDOW_MS = 1000;
         // Half-size of the box, in meters, that switches off every car generator while an unload waits. Larger than the whole map in every direction
-        private const float CAR_GENERATOR_BOX_HALF_SIZE = 100000.0f;
+        private const float CAR_GENERATOR_BOX_HALF_SIZE = 1000000.0f;
         // The game's default vehicle population budget level (0 to 3), restored once no unload is pending
         private const int DEFAULT_VEHICLE_POPULATION_BUDGET = 3;
         // --LiveSubData.cs--
         // Game milliseconds a live SubHandlingData creation request may stay pending before it is given up and falls back to an export-only category
         // The plugin takes a request on its next frame, so a longer wait means the plugin is not running its loop
         private const int LIVE_SUBDATA_REQUEST_TIMEOUT_MS = 3000;
+        // Meters above the water a vehicle's underside may sit and still count as near it for the SeaPlane delete guard
+        // A helicopter floating on its pontoons does not report itself in water, so the height decides
+        private const float SEA_PLANE_NEAR_WATER_HEIGHT = 2.0f;
         // --VehicleTargeting.cs--
         // How far Select Vehicle's pick reaches, in meters
-        // It is longer than any distance a vehicle stays loaded, so visibility, not distance, limits what can be selected
+        // It's longer than any distance a vehicle stays loaded, so visibility, not distance, limits what can be selected
         private const float SELECT_VEHICLE_RANGE = 1500.0f;
         // Meters short of the vehicle's hit point the occlusion line stops, so it never reports the ground under the vehicle as a blocker
         private const float SELECT_VEHICLE_OCCLUSION_MARGIN = 0.5f;
         // Below this, a ray direction component counts as parallel to that bounds axis
         private const float SELECT_VEHICLE_PARALLEL_EPSILON = 1.0e-6f;
+        // Ticks between occlusion line rechecks while the aimed vehicle stays the same. A new aimed vehicle and the confirm press always recheck
+        private const int SELECT_VEHICLE_OCCLUSION_RECHECK_TICKS = 6;
         // --WeaponData.cs--
         // A newly grown phantom or export-only weapon slot seeds from this index
         // None is a harmless placeholder in a saved XML attribute, matching every other unset-slot convention in the editor
@@ -77,16 +82,10 @@ namespace RHE
         // Lowest Slot the menu allows: -1, the game's parser schema init value for an entry with no slot
         private const int ADVANCED_DATA_SLOT_MIN = -1;
         // A count exceeding this, or exceeding the array's own reported capacity, is treated as a corrupt or unreadable read rather than trusted
-        // It is also the most entries any AdvancedData menu lists or lets Add Slot create
+        // It's also the most entries any AdvancedData menu lists or lets Add Slot create
         private const int ADVANCEDDATA_COUNT_SANITY_CEILING = 64;
         // A flag bitmask's valid bit-index range, which bounds every strXxxFlags/AdvancedFlags checkbox write
         private const int FLAG_BIT_COUNT = 32;
-        // A game-owned handling struct's address stays valid for the life of the process, so a short TTL costs only a small, bounded re-validation delay
-        // Nearly every repeat read of the same field then skips VirtualQuery
-        // An access violation at read or write time evicts the offending entry (EvictRawAddressCacheEntry), so a stale cache corrects itself on its first real failure
-        private const int RAW_ADDRESS_CACHE_TTL_MS = 500;
-        // Milliseconds between sweeps that drop every entry past its TTL, so an address validated once and never read again does not stay cached for the whole session
-        private const int RAW_ADDRESS_CACHE_PRUNE_INTERVAL_MS = 30000;
         // --EditorContext.cs--
         // Extra editors beyond Current, and the sole place the editor count is declared. Every loop over the trees reads the array length
         private const int MAX_ADDITIONAL_EDITORS = 3;
@@ -140,6 +139,8 @@ namespace RHE
         // Farthest an extra wheel bound can sit from its wheel's hub across the vehicle's X and Y, in radii of that wheel's main bound
         // The game pushes extras out by 0.6 radii at most
         private const float VISUALIZATION_WHEEL_BOUND_EXTRA_PUSH_RADII = 0.7f;
+        // Ticks between reads of the wheel bounds' current type and box, so a changed shape shows within a tenth of a second at 60 FPS
+        private const int VISUALIZATION_WHEEL_BOUND_SHAPE_REFRESH_TICKS = 6;
         // [Percent Submerged] Shape and build steps of the waterline ring
         // Seconds this visualizer takes to build in when shown, and to build back out when hidden
         private const float VISUALIZATION_SUBMERGED_BUILD_SECONDS = 0.50f;
@@ -316,17 +317,15 @@ namespace RHE
         // A value within this share of its own size, plus the absolute amount below, of a 4 decimal number is taken to be that number before a step is added
         // A field stored in another unit (SteeringLock as radians) comes back from memory with conversion noise
         // A step taken from that value keeps the noise and adds more
+        // The absolute amount stays under half the finest 6 decimal step, so a value 0.000001 from a 4 decimal number is never snapped onto it
         private const double STEP_SNAP_RELATIVE_TOLERANCE = 5.0e-7;
-        private const double STEP_SNAP_ABSOLUTE_TOLERANCE = 1.0e-6;
+        private const double STEP_SNAP_ABSOLUTE_TOLERANCE = 1.0e-7;
         // --ArmedActions.cs--
         // Flash half-period and arm window, in game milliseconds (Game.GameTime), so the window matches the seconds the confirm hint states at any frame rate
         private const int ARMED_FLASH_INTERVAL_MS = 500;
         private const int ARMED_ACTION_EXPIRY_MS  = 5000;
         // How long a result flash lasts, in game milliseconds (Game.GameTime)
         private const int RESULT_FLASH_DURATION_MS = 1500;
-        // --Descriptors.cs--
-        // A Descriptors.json stamped with a lower version than DESCRIPTORS_VERSION is backed up and replaced with the compiled defaults
-        private const int DESCRIPTORS_VERSION = 1;
         // --Preview.cs--
         // Horizontal gap between a panel and the one beside it, Saved Handlings and Preview, and Preview and Diff
         private const float PREVIEW_PANEL_SPACING = 8.0f;
@@ -375,8 +374,9 @@ namespace RHE
         private const float WEAPON_DAMAGE_SCALED_TO_VEH_HEALTH_MULT_DEFAULT = 0.5f;
         // A saved float within this share of its own size, plus the absolute amount below, of a 4 decimal number saves as that number
         // Wider than the cyclers' snap, since a unit-converted field picks up several float steps of drift across repeated saves and applies
+        // The absolute amount stays under half the finest 6 decimal step, so a saved 0.000001 never writes as 0
         private const double SAVE_SNAP_RELATIVE_TOLERANCE = 2.0e-6;
-        private const double SAVE_SNAP_ABSOLUTE_TOLERANCE = 1.0e-6;
+        private const double SAVE_SNAP_ABSOLUTE_TOLERANCE = 1.0e-7;
         // --HandlingMetaXmlMapper.cs--
         // Every SubHandlingData block in the game's own handling.meta holds exactly 3 items, with NULL items filling unused ones
         private const int SUBHANDLING_ITEM_COUNT = 3;
@@ -413,13 +413,11 @@ namespace RHE
         private const int HELD_HOTKEY_FIRST_REPEAT_DELAY_MS = 400;
         // --Log.cs--
         // LoggingMode's default and accepted range, where 0 writes only warnings and errors and 1 writes every line
-        private const int LOGGING_MODE_DEFAULT = 1;
+        private const int LOGGING_MODE_DEFAULT = 0;
         private const int LOGGING_MODE_MIN     = 0;
         private const int LOGGING_MODE_MAX     = 3;
         // Ticks between automatic FlushLog() calls, keeping logBuffer's unwritten tail bounded between writes
         private const int LOG_FLUSH_INTERVAL = 100;
-        // Longest a truncated framework exception message may be inside a log line
-        private const int EXCEPTION_MESSAGE_MAX_LENGTH = 90;
         // --Notifications.cs--
         // ADD_TEXT_COMPONENT_SUBSTRING_PLAYER_NAME accepts at most 99 characters, so a longer message is cut to fit, ending in a 3-character ellipsis
         private const int NOTIF_MAX_CHARS    = 99;
@@ -438,10 +436,8 @@ namespace RHE
         // Game milliseconds between polls for external edits to the INI, the saved handlings, and the ModelMetaData file
         // Used only for a file whose watcher could not start
         private const int OWNED_FILE_EXTERNAL_EDIT_POLL_INTERVAL_MS = 5000;
-        // Game milliseconds between RefreshDescriptors() polls, used only when the descriptors watcher could not start
-        private const int DESCRIPTORS_POLL_INTERVAL_MS = 5000;
         // Fallback cooldown for OnTick's own outer catch, which takes anything a stage's own exception boundary did not catch
-        // It is also the suppression window of each tick stage and menu handler
+        // It's also the suppression window of each tick stage and menu handler
         private const int TICK_ERROR_COOLDOWN = 300;
         // Ticks between truck+trailer auto-mount checks while seated. A genuine seat change checks immediately regardless
         private const int TRAILER_CHECK_INTERVAL = 30;

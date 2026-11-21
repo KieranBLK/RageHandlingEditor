@@ -11,7 +11,6 @@ namespace RHE
         private int uptimeTicks;
         // Game time at which the fallback poll for external edits is due, read only for a file whose watcher could not start
         private int ownedFileExternalEditPollDueTime;
-        private int descriptorsPollDueTime;
         // Set by the IniWatch stage for the stages after it in the same tick, True when that file changed outside the script this tick
         private bool iniChangedThisTick;
         private bool savedHandlingsChangedThisTick;
@@ -61,11 +60,11 @@ namespace RHE
         // One value per exception boundary site: A tick stage or a key press handler. Names the subsystem in the log and keys its own cooldown
         private enum Subsystem
         {
-            FrameStamp, StartupNotifications, SeatWeaponReenable, SavedHandlingsParentRestore, ResultFlash, MenuProcessing, WidthRecalc, RawMemoryWarnings, LogFlush, IniWatch, DescriptorsWatch, NotificationSweep, ModelUnloadPoll, LiveSubDataPoll, PlayerResolve, MenuState,
+            FrameStamp, StartupNotifications, SeatWeaponReenable, SavedHandlingsParentRestore, ResultFlash, MenuProcessing, WidthRecalc, RawMemoryWarnings, LogFlush, IniWatch, NotificationSweep, ModelUnloadPoll, LiveSubDataPoll, PlayerResolve, MenuState,
             MultipleMenusDiag, CheatString, SeatTracking, VehicleResolve, DeletedTargetBackOut, FieldSync, MenuRestore, SeatMerge, WidthAnimation, HintSync, HotkeySuppression, GlobalHotkeyPoll, PreviewReposition, SelectiveCopyFlagPoll, SavedHandlingFileCheck, HandlingDeleteFinish,
             ArmedFlash, ModelMetaDataRetry, Autosave, KeyCapturePoll, HandlingResolve, HandlingVisualization, DriftReassertion, AdditionalEditorTracking, WidthDirtyDrain, NavHoldAcceleration, AutoRespawn, VehicleSelectionHover,
             GlobalHotkeys, ArmedActionBackspace, WeaponSlotReorder, PhantomWeaponSlotReorder, PreviewFocusSwitch,
-            StartupWarmUp
+            StartupWarmUp, RespawnMotionReapply
         }
 
         // Per-subsystem cooldown, indexed by the enum's underlying int value, on the clock of whichever caller owns the subsystem
@@ -161,6 +160,7 @@ namespace RHE
         {
             var stages = new List<TickStage>();
             stages.Add(new TickStage(Subsystem.FrameStamp, StampFrame, null));
+            stages.Add(new TickStage(Subsystem.RespawnMotionReapply, ReapplyRespawnMotion, () => pendingMotionVehicle != null));
             stages.Add(new TickStage(Subsystem.StartupNotifications, notifications.FlushStartupNotifications, notifications.HasPendingStartupNotifications));
             stages.Add(new TickStage(Subsystem.SeatWeaponReenable, ReenableSeatWeaponAfterRelease, IsSeatWeaponReenableDue));
             stages.Add(new TickStage(Subsystem.SavedHandlingsParentRestore, RestoreSavedHandlingsParent, () => navigation.RestoreSavedHandlingsParent));
@@ -172,7 +172,6 @@ namespace RHE
             stages.Add(new TickStage(Subsystem.RawMemoryWarnings, LogRawMemoryWarnings, () => RawMemory.HasPendingAccessWarnings));
             stages.Add(new TickStage(Subsystem.LogFlush, logger.FlushLogOnInterval, null));
             stages.Add(new TickStage(Subsystem.IniWatch, CheckOwnedFileEdits, null));
-            stages.Add(new TickStage(Subsystem.DescriptorsWatch, CheckDescriptorsEdits, null));
             stages.Add(new TickStage(Subsystem.NotificationSweep, notifications.SweepExpiredNotifications, null));
             // Runs regardless of menu visibility, since the player waits for eviction while driving around
             stages.Add(new TickStage(Subsystem.ModelUnloadPoll, PollModelUnloads, () => pendingModelUnloads.Count > 0 || pendingUnloadRespawns.Count > 0));
@@ -408,19 +407,6 @@ namespace RHE
             savedHandlingsChangedThisTick = fileWatcher.IsWatching(OwnedFile.SavedHandlings) ? fileWatcher.TakeDueChange(OwnedFile.SavedHandlings, currentGameTime) : pollFired;
             modelMetaDataChangedThisTick = fileWatcher.IsWatching(OwnedFile.ModelMetaData) ? fileWatcher.TakeDueChange(OwnedFile.ModelMetaData, currentGameTime) : pollFired;
             if (iniChangedThisTick) RefreshIni();
-        }
-
-        private void CheckDescriptorsEdits()
-        {
-            int currentGameTime = Game.GameTime;
-            if (fileWatcher.IsWatching(OwnedFile.Descriptors))
-            {
-                if (fileWatcher.TakeDueChange(OwnedFile.Descriptors, currentGameTime)) RefreshDescriptors();
-                return;
-            }
-            if (currentGameTime < descriptorsPollDueTime) return;
-            descriptorsPollDueTime = currentGameTime + DESCRIPTORS_POLL_INTERVAL_MS;
-            RefreshDescriptors();
         }
 
         private void PollModelUnloads()
@@ -736,15 +722,22 @@ namespace RHE
         private void ReassertCenterOfGravity(EditorContext owner, Vehicle vehicle, HandlingData handling)
         {
             if (vehicle.Type == VehicleType.Motorcycle || vehicle.Type == VehicleType.Bicycle) return;
+            GTA.Math.Vector3 centerOfMass = handling.CenterOfMassOffset;
+            GTA.Math.Vector3 centerOfGravity = vehicle.CenterOfGravityOffset;
+            // While both offsets agree there is nothing to push back, so the collider is never read
+            if (GTA.Math.Vector3.Distance(centerOfMass, centerOfGravity) <= DRIFT_EPSILON)
+            {
+                owner.LastColliderState = ColliderState.Unknown;
+                return;
+            }
             ColliderState state = RawMemory.ReadColliderState(vehicle);
             if (state != owner.LastColliderState)
             {
                 owner.LastColliderState = state;
-                if (logger.IsInfoEnabled()) logger.Log(Dbg.Level.Info, Dbg.ColliderStateChanged(vehicle.Handle, state.ToString(), vehicle.CenterOfGravityOffset, handling.CenterOfMassOffset));
+                if (logger.IsInfoEnabled()) logger.Log(Dbg.Level.Info, Dbg.ColliderStateChanged(modelNames.ResolveModelName(vehicle), vehicle.Model.Hash, state.ToString(), centerOfGravity, centerOfMass));
             }
             if (state != ColliderState.Rigid) return;
-            if (GTA.Math.Vector3.Distance(handling.CenterOfMassOffset, vehicle.CenterOfGravityOffset) <= DRIFT_EPSILON) return;
-            if (logger.IsInfoEnabled()) logger.Log(Dbg.Level.Info, Dbg.CenterOfGravityReasserted(vehicle.Handle, vehicle.CenterOfGravityOffset, handling.CenterOfMassOffset));
+            if (logger.IsInfoEnabled()) logger.Log(Dbg.Level.Info, Dbg.CenterOfGravityReasserted(modelNames.ResolveModelName(vehicle), vehicle.Model.Hash, centerOfGravity, centerOfMass));
             SyncCenterOfGravityOffset(handling, vehicle);
         }
     }

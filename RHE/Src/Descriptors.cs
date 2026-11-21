@@ -1,29 +1,15 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
-using System.IO;
-using System.Text;
-using System.Web.Script.Serialization;
 using GTA;
-using LemonUI.Menus;
 
 namespace RHE
 {
     public partial class RageHandlingEditor : Script
     {
-        private DateTime descriptorsLastWriteTime;
-        private string descriptorsLastContent;
-        private Dictionary<string, Dictionary<string, string>> descriptors = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        // Every description is compiled in, keyed by category, then field
+        private readonly Dictionary<string, Dictionary<string, string>> descriptors = BuildCompiledDescriptors();
         private HashSet<string> descriptorsMissingWarned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> descriptorsTildeWarned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // The file's DisableUpdates value, set only through SetDisableDescriptorsUpdates. False until the file is first read
-        private bool disableDescriptorsUpdates;
-        // One record per tracked description. Prefix is null unless the description leads with a live value (a flag's hex, a speed's MPH) or a lock reason
-        private class TrackedItemDescription { public NativeItem Item; public string Category; public string FieldName; public string Prefix; }
-        // Menus whose own Description is descriptor-driven need the same live-refresh tracking as any NativeItem
-        private class TrackedMenuDescription { public NativeMenu Menu; public string Category; public string FieldName; }
-        private List<TrackedItemDescription> trackedItemDescriptions = new List<TrackedItemDescription>();
-        private List<TrackedMenuDescription> trackedMenuDescriptions = new List<TrackedMenuDescription>();
 
         // The categories a null category falls back to. They share no field names with each other, unlike the sub-handling categories
         private static readonly string[] BaseDescriptorCategories = { "General", "Drivetrain", "Brakes", "Steering", "Traction", "Suspension", "Damage", "Misc", "Flags" };
@@ -59,517 +45,33 @@ namespace RHE
             return value;
         }
 
-        private void RefreshTrackedDescriptions()
-        {
-            for (int i = 0; i < trackedItemDescriptions.Count; i++)
-            {
-                TrackedItemDescription tracked = trackedItemDescriptions[i];
-                string resolved = ResolveDescriptor(tracked.Category, tracked.FieldName);
-                tracked.Item.Description = tracked.Prefix == null ? resolved : tracked.Prefix + resolved;
-            }
-            for (int i = 0; i < trackedMenuDescriptions.Count; i++)
-            {
-                TrackedMenuDescription tracked = trackedMenuDescriptions[i];
-                tracked.Menu.Description = ResolveDescriptor(tracked.Category, tracked.FieldName);
-            }
-        }
-
-        // Records the item alongside the category it was built under, so a live reload re-resolves against the same one
-        // Pass fieldName explicitly when Title carries display-only content not suitable as the JSON key
-        // Returns the tracked entry, so a field whose description leads with its live value can update the entry's Prefix
-        private void TrackDescription(NativeItem item, string category) { TrackDescription(item, category, item.Title, null); }
-        private TrackedItemDescription TrackDescription(NativeItem item, string category, string fieldName, string prefix)
-        {
-            var tracked = new TrackedItemDescription { Item = item, Category = category, FieldName = fieldName, Prefix = prefix };
-            trackedItemDescriptions.Add(tracked);
-            return tracked;
-        }
-
-        private void TrackMenuDescription(NativeMenu menu, string category, string fieldName)
-        {
-            trackedMenuDescriptions.Add(new TrackedMenuDescription { Menu = menu, Category = category, FieldName = fieldName });
-        }
-
-        // disableUpdatesOverride replaces the file's DisableUpdates value. Null keeps the file's own, or False for a fresh file
-        private bool LoadDescriptors(bool? disableUpdatesOverride = null)
-        {
-            try
-            {
-                string descriptorsDirectory = Path.GetDirectoryName(DESCRIPTORS_PATH);
-                if (!string.IsNullOrEmpty(descriptorsDirectory) && !Directory.Exists(descriptorsDirectory)) Directory.CreateDirectory(descriptorsDirectory);
-                string content;
-                Dictionary<string, Dictionary<string, string>> parsed;
-                if (!File.Exists(DESCRIPTORS_PATH))
-                {
-                    SetDisableDescriptorsUpdates(disableUpdatesOverride ?? false);
-                    content = BuildDefaultDescriptors(null, null, null, disableDescriptorsUpdates);
-                    parsed = WriteDescriptorsTransactional(content);
-                    if (parsed != null) logger.Log(Dbg.Level.Info, Dbg.DescriptorsWritten());
-                    else logger.Log(Dbg.Level.Error, Dbg.DescriptorsWriteVerifyFailed());
-                }
-                else content = ValidateDescriptorsFile(out parsed, disableUpdatesOverride);
-                // A failed write already deletes the file (WriteDescriptorsTransactional's own cleanup), so this fallback throws
-                // The outer catch below handles it the same way as any other read failure
-                if (parsed == null)
-                {
-                    content = File.ReadAllText(DESCRIPTORS_PATH);
-                    parsed = ParseDescriptorCategories(content);
-                }
-                CommitDescriptors(parsed, content);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                logger.Log(Dbg.Level.Error, Dbg.DescriptorsLoadFailed(ex.Message));
-                return false;
-            }
-        }
-
-        // The loaded descriptors and the file state a refresh compares against, set together so the file reads as already loaded
-        private void CommitDescriptors(Dictionary<string, Dictionary<string, string>> parsed, string content)
-        {
-            descriptors = parsed;
-            descriptorsMissingWarned.Clear();
-            descriptorsTildeWarned.Clear();
-            descriptorsLastWriteTime = File.GetLastWriteTime(DESCRIPTORS_PATH);
-            descriptorsLastContent = content;
-        }
-
-        // Per-category maps, since same-named fields in different categories must not overwrite each other
-        private static Dictionary<string, Dictionary<string, string>> ParseDescriptorCategories(string json)
-        {
-            var serializer = new JavaScriptSerializer();
-            Dictionary<string, object> categories = serializer.Deserialize<Dictionary<string, object>>(json);
-            var parsed = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var categoryEntry in categories)
-            {
-                var fields = categoryEntry.Value as Dictionary<string, object>;
-                if (fields == null) continue;
-                var categoryFields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var fieldEntry in fields) categoryFields[fieldEntry.Key] = fieldEntry.Value != null ? fieldEntry.Value.ToString() : "";
-                parsed[categoryEntry.Key] = categoryFields;
-            }
-            return parsed;
-        }
-
-        // A structurally broken file is salvaged, and the caller rewrites the canonical structure afterwards
-        private Dictionary<string, Dictionary<string, string>> ParseOrSalvageDescriptors(string content, out bool salvaged)
-        {
-            salvaged = false;
-            try { return ParseDescriptorCategories(content); }
-            catch (Exception ex)
-            {
-                salvaged = true;
-                logger.Log(Dbg.Level.Warn, Dbg.DescriptorsMalformed(ex.Message));
-                return SalvageDescriptorCategories(content);
-            }
-        }
-
-        // Line-based recovery for invalid JSON, reading intact category headers and field lines individually
-        private static Dictionary<string, Dictionary<string, string>> SalvageDescriptorCategories(string content)
-        {
-            var parsed = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-            Dictionary<string, string> currentCategory = null;
-            foreach (string raw in SplitLines(content))
-            {
-                string line = raw.Trim();
-                if (line.Length == 0 || line[0] != '"') continue;
-                int keyEnd = FindClosingQuote(line, 1);
-                if (keyEnd < 0) continue;
-                string key = Unescape(line.Substring(1, keyEnd - 1));
-                int colon = line.IndexOf(':', keyEnd + 1);
-                if (colon < 0) continue;
-                string rest = line.Substring(colon + 1).Trim();
-                if (rest.StartsWith("{"))
-                {
-                    currentCategory = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    parsed[key] = currentCategory;
-                    continue;
-                }
-                if (currentCategory == null || rest.Length == 0 || rest[0] != '"') continue;
-                int valueEnd = FindClosingQuote(rest, 1);
-                if (valueEnd < 0) continue;
-                currentCategory[key] = Unescape(rest.Substring(1, valueEnd - 1));
-            }
-            return parsed;
-        }
-
-        // Index of the quote that closes the one at start - 1, skipping any escaped quote inside the string
-        private static int FindClosingQuote(string text, int start)
-        {
-            for (int i = start; i < text.Length; i++)
-            {
-                if (text[i] == '\\')
-                {
-                    i++;
-                    continue;
-                }
-                if (text[i] == '"') return i;
-            }
-            return -1;
-        }
-
-        private static string Unescape(string text)
-        {
-            var result = new StringBuilder(text.Length);
-            for (int i = 0; i < text.Length; i++)
-            {
-                char current = text[i];
-                if (current != '\\' || i + 1 >= text.Length)
-                {
-                    result.Append(current);
-                    continue;
-                }
-                char escaped = text[++i];
-                if (escaped == '"') result.Append('"');
-                else if (escaped == '\\') result.Append('\\');
-                else if (escaped == '/') result.Append('/');
-                else if (escaped == 'b') result.Append('\b');
-                else if (escaped == 'f') result.Append('\f');
-                else if (escaped == 'n') result.Append('\n');
-                else if (escaped == 'r') result.Append('\r');
-                else if (escaped == 't') result.Append('\t');
-                else if (escaped == 'u' && i + 4 < text.Length)
-                {
-                    int codePoint;
-                    string hex = text.Substring(i + 1, 4);
-                    if (int.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out codePoint))
-                    {
-                        result.Append((char)codePoint);
-                        i += 4;
-                    }
-                    else result.Append("\\u");
-                }
-                else result.Append('\\').Append(escaped);
-            }
-            return result.ToString();
-        }
-
-        private string DescriptorsBackupPath() { return Path.ChangeExtension(DESCRIPTORS_PATH, null) + DESCRIPTORS_DAMAGED_BACKUP_SUFFIX; }
-
-        // Holds the damaged content only for the duration of the repair, so a repair that fails partway still leaves the original recoverable
-        private bool BackupBrokenDescriptors(string content)
-        {
-            try
-            {
-                File.WriteAllText(DescriptorsBackupPath(), content);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                logger.Log(Dbg.Level.Warn, Dbg.DescriptorsBackupFailed(ex.Message));
-                return false;
-            }
-        }
-
-        private void RemoveBrokenDescriptorsBackup()
-        {
-            try { if (File.Exists(DescriptorsBackupPath())) File.Delete(DescriptorsBackupPath()); }
-            catch (Exception ex) { logger.Log(Dbg.Level.Warn, Dbg.DescriptorsBackupCleanupFailed(ex.Message)); }
-        }
-
-        // Reads the top-level "Version" and DisableUpdates entries directly, not via ParseDescriptorCategories, which only keeps category-object values
-        // Returns 0 for a file with no version entry, or for any parse failure. A missing DisableUpdates reads as False
-        // A DisableUpdates value that is not a bool keeps the current setting and logs a WARN
-        private int ReadDescriptorsTopLevel(string json, out bool disableUpdates)
-        {
-            disableUpdates = disableDescriptorsUpdates;
-            Dictionary<string, object> parsed;
-            try { parsed = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json); }
-            catch (Exception ex)
-            {
-                logger.Log(Dbg.Level.Info, Dbg.DescriptorsTopLevelUnreadable(ex.Message));
-                return 0;
-            }
-            object disableValue;
-            if (!parsed.TryGetValue(DESCRIPTORS_DISABLE_UPDATES_KEY, out disableValue)) disableUpdates = false;
-            else if (disableValue is bool) disableUpdates = (bool)disableValue;
-            else logger.Log(Dbg.Level.Warn, Dbg.DescriptorsDisableUpdatesInvalid(disableValue == null ? "null" : disableValue.ToString(), disableUpdates));
-            object versionValue;
-            try { if (parsed.TryGetValue(DESCRIPTORS_VERSION_KEY, out versionValue) && versionValue != null) return Convert.ToInt32(versionValue); }
-            catch (Exception ex) { logger.Log(Dbg.Level.Info, Dbg.DescriptorsVersionUnreadable(ex.Message)); }
-            return 0;
-        }
-
-        // The INI settings diff does not cover this file, so every change logs here. The first read logs its value with no previous one
-        private void SetDisableDescriptorsUpdates(bool value)
-        {
-            bool firstRead = descriptorsLastContent == null;
-            if (!firstRead && value == disableDescriptorsUpdates) return;
-            logger.Log(Dbg.Level.Info, Dbg.DescriptorsDisableUpdatesChanged(firstRead ? "(new)" : disableDescriptorsUpdates.ToString(), value));
-            disableDescriptorsUpdates = value;
-        }
-
-        // Never overwritten, never deleted. A taken backup name gets the next free 2-digit suffix
-        private void BackupDescriptorsOnVersionChange(string existingContent)
-        {
-            string descriptorsDirectory = Path.GetDirectoryName(DESCRIPTORS_PATH);
-            string outPath = Path.Combine(descriptorsDirectory, DESCRIPTORS_VERSION_BACKUP_NAME + DESCRIPTORS_FILE_EXTENSION);
-            int suffix = 1;
-            while (File.Exists(outPath)) outPath = Path.Combine(descriptorsDirectory, DESCRIPTORS_VERSION_BACKUP_NAME + "_" + suffix++.ToString("D2") + DESCRIPTORS_FILE_EXTENSION);
-            File.WriteAllText(outPath, existingContent);
-        }
-
-        // Writes directly to the final path so that the game's mod archive tool registers changes to it instead of omitting it
-        // A successfully written file that fails parsing is removed before the failure is reported
-        // Returns the dictionary its own verify-parse produced from what actually landed on disk, or null on a failed verify
-        // Callers must not log success unconditionally, since a failed verify silently deletes the file
-        private Dictionary<string, Dictionary<string, string>> WriteDescriptorsTransactional(string content)
-        {
-            bool writeCompleted = false;
-            Dictionary<string, Dictionary<string, string>> verified = null;
-            try
-            {
-                File.WriteAllText(DESCRIPTORS_PATH, content);
-                writeCompleted = true;
-                verified = ParseDescriptorCategories(File.ReadAllText(DESCRIPTORS_PATH));
-            }
-            finally
-            {
-                try { if (writeCompleted && verified == null && File.Exists(DESCRIPTORS_PATH)) File.Delete(DESCRIPTORS_PATH); }
-                catch (Exception ex) { logger.Log(Dbg.Level.Warn, Dbg.DescriptorsUnreadableFileRemovalFailed(ex.Message)); }
-            }
-            return verified;
-        }
-
-        // The user's entries that hold a value and differ from the compiled default, which are the customizations a regenerate keeps
-        private static Dictionary<string, Dictionary<string, string>> ExtractChangedDescriptorValues(Dictionary<string, Dictionary<string, string>> userValues, Dictionary<string, Dictionary<string, string>> defaultValues, out int changedCount)
-        {
-            var changedValues = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-            changedCount = 0;
-            foreach (var categoryEntry in userValues)
-            {
-                Dictionary<string, string> defaultFields;
-                defaultValues.TryGetValue(categoryEntry.Key, out defaultFields);
-                foreach (var fieldEntry in categoryEntry.Value)
-                {
-                    if (string.IsNullOrEmpty(fieldEntry.Value)) continue;
-                    string defaultText;
-                    if (defaultFields != null && defaultFields.TryGetValue(fieldEntry.Key, out defaultText) && string.Equals(defaultText, fieldEntry.Value, StringComparison.Ordinal)) continue;
-                    Dictionary<string, string> categoryChanges = GetOrAdd(changedValues, categoryEntry.Key, () => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-                    categoryChanges[fieldEntry.Key] = fieldEntry.Value;
-                    changedCount++;
-                }
-            }
-            return changedValues;
-        }
-
-        // Returns the final canonical content (whatever the file now holds, written or not) with the matching parsed dictionary in result, or null on a genuine failure
-        // A salvaged file whose backup cannot be written is left untouched, and result then holds its salvaged entries over the compiled defaults
-        // The write is skipped when the regenerated content equals the file (result then carries the parsed userValues), so nothing is written or re-parsed
-        // disableUpdatesOverride replaces the file's DisableUpdates value before the upgrade check. Null keeps the file's own
-        private string ValidateDescriptorsFile(out Dictionary<string, Dictionary<string, string>> result, bool? disableUpdatesOverride = null)
-        {
-            result = null;
-            try
-            {
-                string existing = File.ReadAllText(DESCRIPTORS_PATH);
-                bool salvaged;
-                var userValues = ParseOrSalvageDescriptors(existing, out salvaged);
-
-                // Captured directly from the same typed literals BuildDefaultDescriptors' own AppendCategory calls build the string from
-                // That avoids re-parsing the string back with a second JavaScriptSerializer.Deserialize pass
-                var defaultValues = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-                string compiledDefaults = BuildDefaultDescriptors(null, null, defaultValues);
-                int changedCount;
-                var changedValues = ExtractChangedDescriptorValues(userValues, defaultValues, out changedCount);
-                if (salvaged && !BackupBrokenDescriptors(existing))
-                {
-                    // Without its backup a repair could lose the damaged file's entries, so the file is left as it is and this session uses the entries the salvage read
-                    // The caller commits the file's own text, so a refresh retries the repair only once the file changes
-                    logger.Log(Dbg.Level.Warn, Dbg.DescriptorsRepairSkipped());
-                    SetDisableDescriptorsUpdates(disableUpdatesOverride ?? disableDescriptorsUpdates);
-                    var sessionValues = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
-                    BuildDefaultDescriptors(changedValues, null, sessionValues, disableDescriptorsUpdates);
-                    result = sessionValues;
-                    return existing;
-                }
-                bool repairPending = salvaged;
-
-                // Read once. Drives the upgrade check here, and the version stamp and DisableUpdates value a regenerate keeps below
-                // A file that failed to parse has no readable entries, so a salvaged file is never an out-of-date one and keeps the current DisableUpdates value
-                bool fileDisableUpdates = disableDescriptorsUpdates;
-                int existingVersion = salvaged ? DESCRIPTORS_VERSION : ReadDescriptorsTopLevel(existing, out fileDisableUpdates);
-                SetDisableDescriptorsUpdates(disableUpdatesOverride ?? fileDisableUpdates);
-                bool versionUpgradeNeeded = !disableDescriptorsUpdates && existingVersion < DESCRIPTORS_VERSION;
-                if (versionUpgradeNeeded)
-                {
-                    BackupDescriptorsOnVersionChange(existing);
-                    Dictionary<string, Dictionary<string, string>> written = WriteDescriptorsTransactional(compiledDefaults);
-                    if (written != null)
-                    {
-                        logger.Log(Dbg.Level.Info, Dbg.DescriptorsVersionUpgraded(DESCRIPTORS_VERSION));
-                        notifications.Notify(NOTIFICATION_KEY_DESCRIPTORS_VERSION, NOTIF_DESCRIPTORS_UPDATED);
-                        if (repairPending) RemoveBrokenDescriptorsBackup();
-                        result = written;
-                        return compiledDefaults;
-                    }
-                    logger.Log(Dbg.Level.Error, Dbg.DescriptorsWriteVerifyFailed());
-                    return null;
-                }
-                // A miss here (including a purely cosmetic difference from manual hand-editing) falls through to the same write-and-verify path below
-                string regenerated = BuildDefaultDescriptors(changedValues, existingVersion, null, disableDescriptorsUpdates);
-                if (string.Equals(regenerated, existing, StringComparison.Ordinal))
-                {
-                    logger.Log(Dbg.Level.Info, Dbg.DescriptorsUnchanged());
-                    if (repairPending) RemoveBrokenDescriptorsBackup();
-                    result = userValues;
-                    return existing;
-                }
-                Dictionary<string, Dictionary<string, string>> regeneratedDict = WriteDescriptorsTransactional(regenerated);
-                if (regeneratedDict != null)
-                {
-                    logger.Log(Dbg.Level.Info, Dbg.DescriptorsRegenerated(changedCount));
-                    // The backup only exists to survive a repair that dies partway. Once the repaired file is on disk it has no further purpose, and the repair is reported
-                    if (repairPending)
-                    {
-                        RemoveBrokenDescriptorsBackup();
-                        notifications.PostNotificationOnce(NOTIFICATION_KEY_DESCRIPTORS_REPAIRED, NOTIF_DESCRIPTORS_REPAIRED);
-                    }
-                    result = regeneratedDict;
-                    return regenerated;
-                }
-                logger.Log(Dbg.Level.Error, Dbg.DescriptorsWriteVerifyFailed());
-                return null;
-            }
-            catch (Exception ex)
-            {
-                logger.Log(Dbg.Level.Error, Dbg.ValidateDescriptorsFileFailed(ex.Message));
-                return null;
-            }
-        }
-
-        private void RefreshDescriptors()
-        {
-            // A file deleted live is rewritten from compiled defaults on the spot rather than waiting for the next startup, matching how the INI self-corrects
-            if (!File.Exists(DESCRIPTORS_PATH))
-            {
-                if (descriptorsLastContent == null) return;
-                if (!LoadDescriptors()) return;
-                RefreshTrackedDescriptions();
-                // Some tracked items (AIHandling, WeaponHash) compose a live-value suffix onto their resolved description in SyncFieldValues
-                // The plain overwrite above would otherwise discard that suffix on every live descriptor reload
-                // A descriptor reload affects every live tree at once, not just whichever one currently has visual focus
-                SyncAllMountedEditors();
-                SyncSettingsMenuItems();
-                logger.Log(Dbg.Level.Warn, Dbg.DescriptorsRestored());
-                return;
-            }
-            try
-            {
-                DateTime lastWrite = File.GetLastWriteTime(DESCRIPTORS_PATH);
-                if (lastWrite <= descriptorsLastWriteTime) return;
-                string content = File.ReadAllText(DESCRIPTORS_PATH);
-                if (content == descriptorsLastContent)
-                {
-                    descriptorsLastWriteTime = lastWrite;
-                    return;
-                }
-                // Resolved before committing any state either way. A file the validation cannot settle leaves the last good descriptors live and stays eligible for a retry
-                Dictionary<string, Dictionary<string, string>> parsed;
-                content = ValidateDescriptorsFile(out parsed);
-                if (parsed == null)
-                {
-                    content = File.ReadAllText(DESCRIPTORS_PATH);
-                    parsed = ParseDescriptorCategories(content);
-                }
-                CommitDescriptors(parsed, content);
-                RefreshTrackedDescriptions();
-                // A descriptor reload affects every live tree at once, not just whichever one currently has visual focus
-                SyncAllMountedEditors();
-                // The file's DisableUpdates value may have changed, and Settings shows it
-                SyncSettingsMenuItems();
-                logger.Log(Dbg.Level.Info, Dbg.DescriptorsReloaded());
-                notifications.Notify(NOTIFICATION_KEY_DESCRIPTORS_RELOAD, NOTIF_DESCRIPTORS_RELOADED);
-            }
-            catch (Exception ex) { logger.Log(Dbg.Level.Error, Dbg.DescriptorsRefreshFailed(ex.Message)); }
-        }
-
-        private static void AppendJsonString(StringBuilder sb, string value)
-        {
-            sb.Append('"');
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                if (c == '"') sb.Append("\\\"");
-                else if (c == '\\') sb.Append("\\\\");
-                else if (c == '\b') sb.Append("\\b");
-                else if (c == '\f') sb.Append("\\f");
-                else if (c == '\n') sb.Append("\\n");
-                else if (c == '\r') sb.Append("\\r");
-                else if (c == '\t') sb.Append("\\t");
-                else if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("X4"));
-                else sb.Append(c);
-            }
-            sb.Append('"');
-        }
-
         private static KeyValuePair<string, string> DescriptorRow(string key, string text) { return new KeyValuePair<string, string>(key, text); }
 
-        // A row takes the text customizations holds for its category and key, and its compiled text otherwise
-        // captureInto, when passed, also fills a typed dictionary from the same texts the string is built from
-        // This lets a caller capture BuildDefaultDescriptors' own output with no JSON round-trip
-        private static void AppendCategory(StringBuilder sb, string categoryName, Dictionary<string, Dictionary<string, string>> customizations, KeyValuePair<string, string>[] fields, bool isLastCategory, Dictionary<string, Dictionary<string, string>> captureInto = null)
+        private static void AddCategory(Dictionary<string, Dictionary<string, string>> compiled, string categoryName, KeyValuePair<string, string>[] fields)
         {
-            Dictionary<string, string> overrides = CategoryOverrides(customizations, categoryName);
-            var texts = new string[fields.Length];
-            for (int i = 0; i < fields.Length; i++) texts[i] = OverrideOrDefault(overrides, fields[i].Key, fields[i].Value);
-            sb.Append("  ");
-            AppendJsonString(sb, categoryName);
-            sb.AppendLine(": {");
-            for (int i = 0; i < fields.Length; i++)
-            {
-                sb.Append("    ");
-                AppendJsonString(sb, fields[i].Key);
-                sb.Append(": ");
-                AppendJsonString(sb, texts[i]);
-                sb.AppendLine(i == fields.Length - 1 ? "" : ",");
-            }
-            sb.AppendLine(isLastCategory ? "  }" : "  },");
-            if (captureInto != null)
-            {
-                var categoryFields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                for (int i = 0; i < fields.Length; i++) categoryFields[fields[i].Key] = texts[i];
-                captureInto[categoryName] = categoryFields;
-            }
+            var categoryFields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < fields.Length; i++) categoryFields[fields[i].Key] = fields[i].Value;
+            compiled[categoryName] = categoryFields;
         }
 
-        private static string OverrideOrDefault(Dictionary<string, string> overrides, string key, string compiledDefault)
+        private static Dictionary<string, Dictionary<string, string>> BuildCompiledDescriptors()
         {
-            string value;
-            return overrides != null && overrides.TryGetValue(key, out value) ? value : compiledDefault;
-        }
-
-        private static Dictionary<string, string> CategoryOverrides(Dictionary<string, Dictionary<string, string>> customizations, string categoryName)
-        {
-            Dictionary<string, string> fields;
-            return customizations != null && customizations.TryGetValue(categoryName, out fields) ? fields : null;
-        }
-
-        // versionOverride lets the per-field diff path regenerate the file's structure without bumping its version stamp forward. Null writes the current version
-        // disableUpdates is the DisableUpdates value the file is written with
-        // captureInto, when passed, receives the same data as a typed dictionary, so a caller captures the compiled defaults without a second JSON parse
-        private string BuildDefaultDescriptors(Dictionary<string, Dictionary<string, string>> customizations = null, int? versionOverride = null, Dictionary<string, Dictionary<string, string>> captureInto = null, bool disableUpdates = false)
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("{");
-            sb.Append("  \"").Append(DESCRIPTORS_VERSION_KEY).Append("\": ").Append(versionOverride ?? DESCRIPTORS_VERSION).AppendLine(",");
-            sb.Append("  \"").Append(DESCRIPTORS_DISABLE_UPDATES_KEY).Append("\": ").Append(disableUpdates ? "true" : "false").AppendLine(",");
-            AppendCategory(sb, "General", customizations, new[]
+            var compiled = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+            AddCategory(compiled, "General", new[]
             {
                 DescriptorRow("Mass", "Total weight in kilograms. Mostly affects collisions, pushing other entities, and damage. Heavier takes less and deals more. Traction, drive, brake, and spring forces all scale proportionally. Requires an unload to physically apply, except for collision damage scale"),
-                DescriptorRow("InitialDragCoefficient", "Aerodynamic drag. Higher = stronger resistance. Requires an unload to recalculate the base air damping"),
+                DescriptorRow("InitialDragCoefficient", "Aerodynamic drag. Higher = stronger resistance. Requires an unload to recalculate the base air damping, for a refreshed max speed estimate"),
                 DescriptorRow("DownforceModifier", "Scales the amount of downforce relative to speed. 1 or less = standard linear downforce. Above 1, it increases by speed squared, peaking at 90% of InitialDriveMaxFlatVelocity multiplied by the value, so it can be weaker than standard below that. Above 100 in SP is a flat 30% of standard. No effect on motorcycles"),
                 DescriptorRow("PopUpLightRotation", "Rotation of pop-up headlights in degrees. The sign sets the direction, any non-zero value opens them in 1 second. 0 uses the default of 7 degrees"),
                 DescriptorRow("PercentSubmerged", "Percent of the bounding box that sits under water while floating at rest. Lower floats higher and sinks slower. 50 holds the vehicle up like an airtight hull, 100 sinks it like a flooded one, and negative sinks it outright, results vary by model. Above 100, it can't float and sinks once partly under (20% for cars). Requires an unload to apply"),
-                DescriptorRow("CenterOfMassOffsetX", string.Format(DESC_AXIS_CENTER_OF_MASS_OFFSET, "X")),
-                DescriptorRow("CenterOfMassOffsetY", string.Format(DESC_AXIS_CENTER_OF_MASS_OFFSET, "Y")),
-                DescriptorRow("CenterOfMassOffsetZ", string.Format(DESC_AXIS_CENTER_OF_MASS_OFFSET, "Z")),
-                DescriptorRow("InertiaMultiplierX", string.Format(DESC_AXIS_INERTIA_MULTIPLIER, "X")),
-                DescriptorRow("InertiaMultiplierY", string.Format(DESC_AXIS_INERTIA_MULTIPLIER, "Y")),
-                DescriptorRow("InertiaMultiplierZ", string.Format(DESC_AXIS_INERTIA_MULTIPLIER, "Z")),
-            }, false, captureInto);
-            AppendCategory(sb, "Drivetrain", customizations, new[]
+                DescriptorRow("CenterOfMassOffsetX", "Offset along the X axis from the model's center." + "\n~y~Note: The game resets the entity property (CenterOfGravityOffset) to the value the handling loaded with on a repair, respawn, an extra toggling, or when a door opens or breaks off, so this requires an unload to apply (except for bikes)"),
+                DescriptorRow("CenterOfMassOffsetY", "Offset along the Y axis from the model's center." + "\n~y~Note: The game resets the entity property (CenterOfGravityOffset) to the value the handling loaded with on a repair, respawn, an extra toggling, or when a door opens or breaks off, so this requires an unload to apply (except for bikes)"),
+                DescriptorRow("CenterOfMassOffsetZ", "Offset along the Z axis from the model's center." + "\n~y~Note: The game resets the entity property (CenterOfGravityOffset) to the value the handling loaded with on a repair, respawn, an extra toggling, or when a door opens or breaks off, so this requires an unload to apply (except for bikes)"),
+                DescriptorRow("InertiaMultiplierX", "Resistance to rotation around the X axis. No effect on planes, helicopters, boats, submarines, and bicycles. Requires an unload to apply"),
+                DescriptorRow("InertiaMultiplierY", "Resistance to rotation around the Y axis. No effect on planes, helicopters, boats, submarines, and bicycles. Requires an unload to apply"),
+                DescriptorRow("InertiaMultiplierZ", "Resistance to rotation around the Z axis. No effect on planes, helicopters, boats, submarines, and bicycles. Requires an unload to apply"),
+            });
+            AddCategory(compiled, "Drivetrain", new[]
             {
                 DescriptorRow("DriveBiasFront", "InitialDriveForce distribution to each axle. Below 0.1 = RWD, above 0.9 = FWD, in between = AWD. Requires a respawn to apply. With CF_DIFF_CENTRE, it only picks which axles are powered, and the center differential sets the bias"),
                 DescriptorRow("InitialDriveGears", "Number of gears, excluding reverse. Transmission upgrades add 1 total. Requires a respawn on a vehicle with no modkit assigned in its carvariations.meta. Max = 10 with GearRatioPatch installed, 6 without it"),
@@ -578,15 +80,15 @@ namespace RHE
                 DescriptorRow("ClutchChangeRateUpShift", "How fast the clutch re-engages after an upshift. Higher = faster shifts"),
                 DescriptorRow("ClutchChangeRateDownShift", "How fast the clutch re-engages after a downshift. Higher = faster shifts"),
                 DescriptorRow("InitialDriveMaxFlatVelocity", "Target top speed in km/h. Vehicles may accelerate beyond or not reach this depending on InitialDriveForce, InitialDragCoefficient, TractionCurves/Bias, and DriveBias. Negative = no top speed limit"),
-            }, false, captureInto);
-            AppendCategory(sb, "Brakes", customizations, new[]
+            });
+            AddCategory(compiled, "Brakes", new[]
             {
                 DescriptorRow("BrakeForce", "Max force per unit of weight when braking. Effectiveness influenced by TractionCurves"),
                 DescriptorRow("BrakeBiasFront", "Share of BrakeForce on each axle. 1.0 = Front, 0.0 = Rear. Effectiveness influenced by TractionBiasFront"),
                 DescriptorRow("HandbrakeForce", "Max force per unit of weight applied to the rear and middle wheels when handbraking, also cuts ABS and DriveForce. Eases to half strength over about a second while held. Effectiveness influenced by TractionCurves/Bias"),
-            }, false, captureInto);
-            AppendCategory(sb, "Steering", customizations, new[] { DescriptorRow("SteeringLock", "Maximum steering angle in degrees. Effectiveness influenced by TractionCurves/Bias"), }, false, captureInto);
-            AppendCategory(sb, "Traction", customizations, new[]
+            });
+            AddCategory(compiled, "Steering", new[] { DescriptorRow("SteeringLock", "Maximum steering angle in degrees. Effectiveness influenced by TractionCurves/Bias"), });
+            AddCategory(compiled, "Traction", new[]
             {
                 DescriptorRow("TractionCurveMax", "Peak grip when the tire is not slipping. Also defines the bike burnout spin torque"),
                 DescriptorRow("TractionCurveMin", "Grip when the tire is slipping. Grip moves from TractionCurveMax toward this, then drops to it"),
@@ -596,8 +98,8 @@ namespace RHE
                 DescriptorRow("CamberStiffness", "Sideways force applied to the wheels when on the ground above 5 m/s, pushing them outwards, towards the bodyroll direction. 0 or negative = no effect"),
                 DescriptorRow("TractionBiasFront", "Distribution of grip between the front and rear axles, and a multiplier for each axle's camber force and slip ratios. Base balance influenced by SuspensionBiasFront. Boats and submarines use this to scale rudder response." + "\n~y~Note: 0 makes wheels vanish (respawn to fix), and 1 locks the vehicle in place"),
                 DescriptorRow("TractionLossMultiplier", "How much the surface material affects grip, top speed, and drag. 1 = the material's values, 0 = every surface acts like road"),
-            }, false, captureInto);
-            AppendCategory(sb, "Suspension", customizations, new[]
+            });
+            AddCategory(compiled, "Suspension", new[]
             {
                 DescriptorRow("SuspensionForce", "Spring stiffness per unit of mass. Lower = weaker resistance to downforce pressure. Also scales the body rock while revving the engine"),
                 DescriptorRow("SuspensionCompressionDamping", "Damping while the suspension compresses. Higher makes compression harder, lower allows more compression under less pressure. Aircrafts ignore it and use SuspensionReboundDamping both ways"),
@@ -610,15 +112,15 @@ namespace RHE
                 DescriptorRow("AntiRollBarBiasFront", "Distribution of AntiRollBarForce between the front and rear axles. 1.0 = Front, 0.0 = Rear. Influenced by SuspensionBiasFront"),
                 DescriptorRow("RollCenterHeightFront", "Front lever fulcrum height in meters above each tire's ground contact point along the up axis that traction and suspension force use to roll and pitch the body. Higher = less body roll when turning, and less pitch under acceleration/braking. A value above the COM's height inverts both. Tracked vehicles only use this for suspension forces"),
                 DescriptorRow("RollCenterHeightRear", "Rear lever fulcrum height in meters above each tire's ground contact point along the up axis that traction and suspension force use to roll and pitch the body. Higher = less body roll when turning, and less pitch under acceleration/braking. A value above the COM's height inverts both. Tracked vehicles only use this for suspension forces"),
-            }, false, captureInto);
-            AppendCategory(sb, "Damage", customizations, new[]
+            });
+            AddCategory(compiled, "Damage", new[]
             {
                 DescriptorRow("CollisionDamageMultiplier", "Scales overall damage from collisions, divided by Mass, so heavier vehicles take less"),
                 DescriptorRow("WeaponDamageMultiplier", "Scales damage from weapons (plus melee), explosions, and fires. Ignored by weapons that deal damage based on the vehicle's max health (WeaponDamageScaledToVehHealthMult)"),
                 DescriptorRow("DeformationDamageMultiplier", "Scales how much the body physically deforms from collisions. Heavier vehicles deform less, armor upgrades reduce it further"),
                 DescriptorRow("EngineDamageMultiplier", "Scales engine damage from collisions only, bullets and explosions ignore it"),
-            }, false, captureInto);
-            AppendCategory(sb, "Misc", customizations, new[]
+            });
+            AddCategory(compiled, "Misc", new[]
             {
                 DescriptorRow("PetrolTankVolume", "Fuel tank capacity. Filled at spawn or repairs. Only drains by leaking, which starts once fuel tank health drops below 700. Under 10%, the engine misfires, and an empty tank makes the vehicle undriveable. At 0, the engine never starts. Electric vehicles never leak or misfire. Requires a respawn to reset the current tank"),
                 DescriptorRow("OilVolume", "Engine oil capacity. Filled at spawn or repairs. Starts leaking once engine health drops below 200. Below 25%, a running engine takes damage, more at higher RPM. Electric vehicles never leak or take oil tank damage"),
@@ -628,12 +130,12 @@ namespace RHE
                 DescriptorRow("MonetaryValue", "How much the vehicle is worth. Only used in GTA:O"),
                 DescriptorRow("RocketBoostCapacity", "Max capacity of rocket boost, in seconds. Only triggers with a full charge for cars. Above 2.0, pressing boost again mid fire cancels it like the scramjet, and empties the remaining charge"),
                 DescriptorRow("BoostMaxSpeed", "The speed at which rocket boost stops accelerating the vehicle. The default of 70 m/s is around 157 MPH. Using boost above this speed slows the vehicle down to it. Also scales the in-air recharge rate"),
-            }, false, captureInto);
-            AppendCategory(sb, "Flags", customizations, new[]
+            });
+            AddCategory(compiled, "Flags", new[]
             {
                 DescriptorRow("AIHandling", "Defines the preset used to determine how NPCs drive this vehicle"),
-            }, false, captureInto);
-            AppendCategory(sb, "ModelFlagBits", customizations, new[]
+            });
+            AddCategory(compiled, "ModelFlagBits", new[]
             {
                 DescriptorRow("MF_ABS_STD", "Arcadey ABS. Removes brake slip so the wheels never lock. Requires a respawn to apply. A police pursuit can clear it until the next respawn"),
                 DescriptorRow("MF_ABS_OPTION", "50% chance at spawn of the vehicle being fitted with ABS_STD, when ABS_STD itself is not set. A failed roll moves on to the ALT_ABS flags. Requires a respawn to apply"),
@@ -667,9 +169,9 @@ namespace RHE
                 DescriptorRow("MF_NO_WHEEL_BURST", "Forces bulletproof tires on this vehicle by default. They cannot be toggled off while this is set. Requires a respawn to apply"),
                 DescriptorRow("MF_SIT_IN_BOAT", "No effect. Never read by the game"),
                 DescriptorRow("MF_TANDEM_SEATING", "No effect. Never read by the game"),
-            }, false, captureInto);
+            });
             // HF_LAST_AVAILABLE_FLAG omitted (nullsub)
-            AppendCategory(sb, "HandlingFlagBits", customizations, new[]
+            AddCategory(compiled, "HandlingFlagBits", new[]
             {
                 DescriptorRow("HF_ALT_EXT_WHEEL_BOUNDS_BEH", "Only for models with grouped wheel collision bounds: Pushes those extra bounds forward for front wheels and backward for rear ones so they stick out past them. Also lets them collide with the ground and other surfaces at any angle, unless the vehicle has FLAG_HAS_RAMP (vehicles.meta). No effect on bikes, or with EXT_WHEEL_BOUNDS_COL set"),
                 DescriptorRow("HF_ALT_EXT_WHEEL_BOUNDS_SHRINK", "Only for models with grouped wheel collision bounds: While a driver is in, makes those extra bounds much thinner and raises them by half the wheel's width. Pushes them further out with ALT_EXT_WHEEL_BOUNDS_BEH. No effect on bikes, or with EXT_WHEEL_BOUNDS_COL set"),
@@ -702,8 +204,8 @@ namespace RHE
                 DescriptorRow("HF_SMOOTHED_COMPRESSION", "Smooths suspension compression by blending it between each physics step's ground check, so the spring force changes gradually over bumps instead of snapping. Hardcoded (enabled) for every vehicle, toggling this has no effect"),
                 DescriptorRow("HF_TYRES_CAN_CLIP", "Simulates tire compression by letting them clip into the ground by up to 85% of the gap between tire and rim when the suspension bottoms out, for improved handling. Rim size is defined by wheelScales in vehicles.meta, or from rimRadius in carcols.meta for custom wheels"),
                 DescriptorRow("HF_TYRES_RAISE_SIDE_IMPACT_THRESHOLD", "Raises the wheel bounds side thresholds against other vehicles, so contact isn't missed when driving over them at an angle"),
-            }, false, captureInto);
-            AppendCategory(sb, "DamageFlagBits", customizations, new[]
+            });
+            AddCategory(compiled, "DamageFlagBits", new[]
             {
                 DescriptorRow("DF_BONNET", "Marks the hood (bonnet) bone as unbreakable due to collisions. Requires a respawn to apply"),
                 DescriptorRow("DF_BOOT", "Marks the trunk (boot) bones as unbreakable due to collisions. Requires a respawn to apply"),
@@ -711,8 +213,8 @@ namespace RHE
                 DescriptorRow("DF_DRIVER_PASSENGER_SIDE_REAR_DOOR", "Marks the passenger-side rear door (door_pside_r) bone as unbreakable due to collisions. Requires a respawn to apply"),
                 DescriptorRow("DF_DRIVER_SIDE_FRONT_DOOR", "Marks the driver-side front door (door_dside_f) bone as unbreakable due to collisions. Requires a respawn to apply"),
                 DescriptorRow("DF_DRIVER_SIDE_REAR_DOOR", "Marks the driver-side rear door (door_dside_r) bone as unbreakable due to collisions. Requires a respawn to apply"),
-            }, false, captureInto);
-            AppendCategory(sb, "AdvancedFlagBits", customizations, new[]
+            });
+            AddCategory(compiled, "AdvancedFlagBits", new[]
             {
                 DescriptorRow("CF_ALLOW_REDUCED_SUSPENSION_FORCE", "Allows scripts to lower the vehicle's stance. Requires FIX_OLD_BUGS"),
                 DescriptorRow("CF_ALLOW_TURN_ON_SPOT", "Allows rotating on the spot by applying an independent amount of throttle to every wheel on one side of the vehicle"),
@@ -744,8 +246,8 @@ namespace RHE
                 DescriptorRow("CF_REDUCE_BODY_ROLL_WITH_SUSPENSION_MODS", "Reduces bodyroll per suspension upgrade equipped"),
                 DescriptorRow("CF_REDUCED_SELF_RIGHTING_SPEED", "Caps how fast air control can spin the vehicle at a 5th of the normal limit, flipping back over is also slower, sometimes impossible"),
                 DescriptorRow("CF_USE_DOWNFORCE_BIAS", "Changes downforce/spoiler tuning to the OpenWheel class configuration. Each mod needs AdvancedData values to affect downforce"),
-            }, false, captureInto);
-            AppendCategory(sb, "SpecialFlightFlagBits", customizations, new[]
+            });
+            AddCategory(compiled, "SpecialFlightFlagBits", new[]
             {
                 DescriptorRow("SF_DONT_RETRACT_WHEELS", "No effect. Never read by the game"),
                 DescriptorRow("SF_FORCE_MIN_THROTTLE_WHEN_TURNING", "Forces a minimum throttle (up to 30%) when steering at speed"),
@@ -755,8 +257,8 @@ namespace RHE
                 DescriptorRow("SF_REDUCE_DRAG_WITH_SPEED", "Blends the hover damping toward the Min damping values as forward speed rises, reducing drag at speed"),
                 DescriptorRow("SF_STEER_TOWARDS_VELOCITY", "Enables StabilityAssist: Auto-recenters the vehicle toward its direction of travel after steering"),
                 DescriptorRow("SF_WORKS_UPSIDE_DOWN", "Makes hover thrust keep working while upside down, extra drag enforces the hover top speed, the handbrake removes the remaining gravity, and hover height is measured along the body. Also disables animation of the thruster bones (misc_c/e)"),
-            }, false, captureInto);
-            AppendCategory(sb, CATEGORY_CAR, customizations, new[]
+            });
+            AddCategory(compiled, CATEGORY_CAR, new[]
             {
                 DescriptorRow("BackEndPopUpCarImpulseMult", "Upward force applied to the rear end of the vehicle to lift it off the ground in a frontend vehicle to vehicle collision. Scales with the collision's force. No effect if BackEndPopUpMaxDeltaSpeed = 0"),
                 DescriptorRow("BackEndPopUpBuildingImpulseMult", "Upward force applied to the rear end of the vehicle to lift it off the ground in a frontend vehicle to map collision. Scales with the collision's force. No effect if BackEndPopUpMaxDeltaSpeed = 0"),
@@ -774,8 +276,8 @@ namespace RHE
                 DescriptorRow("AdvancedDataSlot", "Vehicle mod slot this entry affects, in the game's own mod numbering, which differs from SET_VEHICLE_MOD past slot 10. -1 = any slot, which only downforce entries accept"),
                 DescriptorRow("AdvancedDataIndex", "Which part (mod index) must be installed in the targeted slot for this entry to apply. Downforce entries use the part's index in the whole mod kit instead"),
                 DescriptorRow("AdvancedDataValue", "Value used when that part is installed: Wheelie torque multiplier, downforce multiplier (spoiler/front bumper), HSW top speed percentage, or turbo power, depending on the slot"),
-            }, false, captureInto);
-            AppendCategory(sb, CATEGORY_BIKE, customizations, new[]
+            });
+            AddCategory(compiled, CATEGORY_BIKE, new[]
             {
                 DescriptorRow("LeanForwardCOMMultiplier", "How much the center of gravity is shifted by leaning forward"),
                 DescriptorRow("LeanForwardForceMultiplier", "How much force is applied when leaning forward. Only applies while braking or with both wheels off the ground. On the ground, it fades in with speed"),
@@ -797,24 +299,24 @@ namespace RHE
                 DescriptorRow("OnStandLeanAngle", "Lean angle in degrees when parked idle, or on the stand. Used by the pick-up task"),
                 DescriptorRow("OnStandSteerAngle", "Handlebar angle in radians when parked on the stand"),
                 DescriptorRow("JumpForce", "Force of the bike's jump (bunny hop). 0 or less = disabled"),
-            }, false, captureInto);
-            AppendCategory(sb, CATEGORY_FLYING, customizations, BuildFlyingFieldDescriptors(), false, captureInto);
+            });
+            AddCategory(compiled, CATEGORY_FLYING, BuildFlyingFieldDescriptors());
             // A vehicle can carry both entries at once (e.g. a VTOL plane), distinguished by a handlingType XML tag rather than a separate struct
-            AppendCategory(sb, CATEGORY_VERTICAL_FLYING, customizations, BuildFlyingFieldDescriptors(), false, captureInto);
-            AppendCategory(sb, CATEGORY_SPECIAL_FLIGHT, customizations, new[]
+            AddCategory(compiled, CATEGORY_VERTICAL_FLYING, BuildFlyingFieldDescriptors());
+            AddCategory(compiled, CATEGORY_SPECIAL_FLIGHT, new[]
             {
                 DescriptorRow("Mode", "0 = Glider, 1 = Hover. Glider mode requires FLAG_HAS_GLIDER in vehicles.meta to fly. Without it, special flight still toggles, but with no wings or lift"),
-                DescriptorRow("AngularDampingX", string.Format(DESC_AXIS_ANGULAR_DAMPING, "X")),
-                DescriptorRow("AngularDampingY", string.Format(DESC_AXIS_ANGULAR_DAMPING, "Y")),
-                DescriptorRow("AngularDampingZ", string.Format(DESC_AXIS_ANGULAR_DAMPING, "Z")),
-                DescriptorRow("AngularDampingMinX", string.Format(DESC_AXIS_ANGULAR_DAMPING_MIN, "X")),
-                DescriptorRow("AngularDampingMinY", string.Format(DESC_AXIS_ANGULAR_DAMPING_MIN, "Y")),
-                DescriptorRow("AngularDampingMinZ", string.Format(DESC_AXIS_ANGULAR_DAMPING_MIN, "Z")),
+                DescriptorRow("AngularDampingX", "Rotation damping for the X axis while hovering. With SF_REDUCE_DRAG_WITH_SPEED, it blends toward AngularDampingMinX as forward speed rises"),
+                DescriptorRow("AngularDampingY", "Rotation damping for the Y axis while hovering. With SF_REDUCE_DRAG_WITH_SPEED, it blends toward AngularDampingMinY as forward speed rises"),
+                DescriptorRow("AngularDampingZ", "Rotation damping for the Z axis while hovering. With SF_REDUCE_DRAG_WITH_SPEED, it blends toward AngularDampingMinZ as forward speed rises"),
+                DescriptorRow("AngularDampingMinX", "Minimum rotation damping for the X axis at high speed while hovering when SF_REDUCE_DRAG_WITH_SPEED is set"),
+                DescriptorRow("AngularDampingMinY", "Minimum rotation damping for the Y axis at high speed while hovering when SF_REDUCE_DRAG_WITH_SPEED is set"),
+                DescriptorRow("AngularDampingMinZ", "Minimum rotation damping for the Z axis at high speed while hovering when SF_REDUCE_DRAG_WITH_SPEED is set"),
                 DescriptorRow("LinearDampingX", "Sideways movement damping while hovering. With SF_REDUCE_DRAG_WITH_SPEED set, this blends with forward speed times throttle"),
                 DescriptorRow("LinearDampingY", "Forward movement damping while hovering. With SF_REDUCE_DRAG_WITH_SPEED set, this blends toward LinearDampingMinY with forward speed"),
                 DescriptorRow("LinearDampingZ", "Vertical movement damping while hovering"),
-                DescriptorRow("LinearDampingMinX", string.Format(DESC_AXIS_LINEAR_DAMPING_MIN, "X")),
-                DescriptorRow("LinearDampingMinY", string.Format(DESC_AXIS_LINEAR_DAMPING_MIN, "Y")),
+                DescriptorRow("LinearDampingMinX", "Minimum movement damping for the X axis at high speed while hovering when SF_REDUCE_DRAG_WITH_SPEED is set"),
+                DescriptorRow("LinearDampingMinY", "Minimum movement damping for the Y axis at high speed while hovering when SF_REDUCE_DRAG_WITH_SPEED is set"),
                 DescriptorRow("LinearDampingMinZ", "No effect. Never read by the game"),
                 DescriptorRow("LiftCoefficient", "Wing lift strength, scaled with speed squared. Glider mode caps the speed at MaxLiftVelocity, hover mode doesn't"),
                 DescriptorRow("CriticalLiftAngle", "Glider mode only. Wing angle of attack in degrees where lift peaks"),
@@ -840,8 +342,8 @@ namespace RHE
                 DescriptorRow("MinSpeedForThrustFalloff", "Fraction of top speed where thrust starts fading out, reaching 0 at top speed. With 0 the fade starts at standstill instead of being off"),
                 DescriptorRow("BrakingThrustScale", "Reverse thrust strength when braking. When above 0, the thrust is multiplied by this value and clamped so it can stop the vehicle but not reverse it within one step (at least 10% of MaxThrust stays available), 0 leaves the thrust unscaled and unclamped"),
                 DescriptorRow("Flags", "Hover Mode flags: Alters hover mode behavior"),
-            }, false, captureInto);
-            AppendCategory(sb, CATEGORY_BOAT, customizations, new[]
+            });
+            AddCategory(compiled, CATEGORY_BOAT, new[]
             {
                 DescriptorRow("BoxFrontMultiplier", "How far forward, as a fraction of the bounding box's size, the water sample points reach. Requires an unload to apply"),
                 DescriptorRow("BoxRearMultiplier", "How far back, as a fraction of the bounding box's size, the water sample points reach. Requires an unload to apply"),
@@ -861,9 +363,9 @@ namespace RHE
                 DescriptorRow("MoveResistanceX", "Horizontal water drag. Requires an unload to apply"),
                 DescriptorRow("MoveResistanceY", "Drag that pushes up, so it acts while the hull sinks. Requires an unload to apply"),
                 DescriptorRow("MoveResistanceZ", "Drag that pushes down, so it acts while the hull rises. Requires an unload to apply"),
-                DescriptorRow("TurnResistanceX", string.Format(DESC_AXIS_BOAT_TURN_RESISTANCE, "X")),
-                DescriptorRow("TurnResistanceY", string.Format(DESC_AXIS_BOAT_TURN_RESISTANCE, "Y")),
-                DescriptorRow("TurnResistanceZ", string.Format(DESC_AXIS_BOAT_TURN_RESISTANCE, "Z")),
+                DescriptorRow("TurnResistanceX", "Resistance to rotation in water on the X axis"),
+                DescriptorRow("TurnResistanceY", "Resistance to rotation in water on the Y axis"),
+                DescriptorRow("TurnResistanceZ", "Resistance to rotation in water on the Z axis"),
                 DescriptorRow("LookLRCamHeight", "No effect. Never read by the game"),
                 DescriptorRow("DragCoefficient", "Water drag of the hull, once it moves faster than about 0.3 m/s through the water. Up to 10x stronger near a waterfall"),
                 DescriptorRow("KeelSphereSize", "When above 0, this adds keel spheres of this size that grip the water and help steering. 0 or less uses an older keel force model instead. Requires an unload to apply because the spheres are built only when the model is loaded for the first time, so a plain edit to this only switches between the 2 keel models"),
@@ -877,8 +379,8 @@ namespace RHE
                 DescriptorRow("DeepWaterSampleBuoyancyMultiplier", "Buoyancy multiplier of parts of the hull that are fully under water"),
                 DescriptorRow("TransmissionMultiplier", "Multiplies the boat's drive force"),
                 DescriptorRow("TractionMultiplier", "Multiplies keel grip in the water, based on TractionCurveLateral. Requires an unload to apply"),
-            }, false, captureInto);
-            AppendCategory(sb, CATEGORY_SEA_PLANE, customizations, new[]
+            });
+            AddCategory(compiled, CATEGORY_SEA_PLANE, new[]
             {
                 DescriptorRow("LeftPontoonComponentId", "Component ID of the left pontoon's collision within a grouped chassis. Requires an unload to apply"),
                 DescriptorRow("RightPontoonComponentId", "Component ID of the right pontoon's collision within a grouped chassis. Requires an unload to apply"),
@@ -891,12 +393,12 @@ namespace RHE
                 DescriptorRow("PontoonVerticalDampingUp", "Vertical water damping of the pontoons while sinking"),
                 DescriptorRow("PontoonVerticalDampingDown", "Vertical water damping of the pontoons while rising"),
                 DescriptorRow("KeelSphereSize", "No effect. Never read by the game, only BoatHandlingData's KeelSphereSize is used"),
-            }, false, captureInto);
-            AppendCategory(sb, CATEGORY_SUBMARINE, customizations, new[]
+            });
+            AddCategory(compiled, CATEGORY_SUBMARINE, new[]
             {
-                DescriptorRow("TurnResistanceX", DESC_SUBMARINE_TURN_RESISTANCE),
-                DescriptorRow("TurnResistanceY", DESC_SUBMARINE_TURN_RESISTANCE),
-                DescriptorRow("TurnResistanceZ", DESC_SUBMARINE_TURN_RESISTANCE),
+                DescriptorRow("TurnResistanceX", "Resistance to rotation in water, per axis, doubled unless the model has articulated doors. Requires an unload to apply"),
+                DescriptorRow("TurnResistanceY", "Resistance to rotation in water, per axis, doubled unless the model has articulated doors. Requires an unload to apply"),
+                DescriptorRow("TurnResistanceZ", "Resistance to rotation in water, per axis, doubled unless the model has articulated doors. Requires an unload to apply"),
                 DescriptorRow("MoveResistanceXY", "Horizontal water drag. Requires an unload to apply"),
                 DescriptorRow("MoveResistanceZ", "Vertical water drag. Its force can grow up to 10x larger against sinking than against rising. Requires an unload to apply"),
                 DescriptorRow("PitchMultiplier", "Pitch control strength"),
@@ -905,8 +407,8 @@ namespace RHE
                 DescriptorRow("DiveSpeed", "How fast the sub dives and surfaces"),
                 DescriptorRow("RollMultiplier", "New steering model only (subs with both rudder and elevator_l bones): Roll torque, how far the sub banks into a turn"),
                 DescriptorRow("RollStabilize", "New steering model only: Torque that levels the roll"),
-            }, false, captureInto);
-            AppendCategory(sb, CATEGORY_TRAILER, customizations, new[]
+            });
+            AddCategory(compiled, CATEGORY_TRAILER, new[]
             {
                 DescriptorRow("AttachLimitPitch", "Maximum pitch angle in degrees between the trailer and the truck while attached. 0 locks it, and negative removes the limit. Applies when the trailer attaches"),
                 DescriptorRow("AttachLimitRoll", "Maximum roll angle in degrees between the trailer and the truck while attached. 0 locks it, and negative removes the limit. Applies when the trailer attaches"),
@@ -917,8 +419,8 @@ namespace RHE
                 DescriptorRow("AttachedMaxPenetration", "Extra slack added to both ends of the hitch distance when AttachedMaxDistance is above 0, letting the trailer push closer and pull farther. Applies when the trailer attaches"),
                 DescriptorRow("AttachRaiseZ", "Only applies to a ball hitch, and ignored when AttachedMaxDistance is above 0. Each time the trailer collides with its tow vehicle, both hitch points are raised by this height in meters for a moment so the two separate"),
                 DescriptorRow("PositionConstraintMassRatio", "Mass ratio used by the hitch: How much the trailer's motion can influence the truck. Applies when the trailer attaches. Lower = heavier"),
-            }, false, captureInto);
-            AppendCategory(sb, CATEGORY_WEAPON, customizations, new[]
+            });
+            AddCategory(compiled, CATEGORY_WEAPON, new[]
             {
                 DescriptorRow("WeaponHash", "Weapon this slot uses. Requires a respawn to apply"),
                 DescriptorRow("WeaponSeat", "Vehicle seat the player has to be in to use the weapon. Requires a respawn to apply"),
@@ -940,9 +442,8 @@ namespace RHE
                 DescriptorRow("MiscGadgetVar", "How fast the misc_a/b/c/d cog bones turn, relative to the tracks. 0 = no animation. The Scarab turns 8 bones, misc_a to h, with c, d, g, and h at 3x the angle"),
                 DescriptorRow("WheelImpactOffset", "Vertically offsets wheel collision bounds independently of the wheel model to modify the height at which the vehicle rests on the ground. The offset shrinks with tire health degradation, and steered wheels are skipped unless HF_STEER_ALL_WHEELS is set. Requires a respawn to apply"),
                 DescriptorRow("WeaponDamageScaledToVehHealthMult", "Fraction of the vehicle's max health removed per hit by weapons that scale with vehicle health"),
-            }, true, captureInto);
-            sb.AppendLine("}");
-            return sb.ToString();
+            });
+            return compiled;
         }
 
         private static KeyValuePair<string, string>[] BuildFlyingFieldDescriptors()
@@ -971,12 +472,12 @@ namespace RHE
                 DescriptorRow("GearDownLiftMultiplier", "Lift multiplier when the landing gear is down. 1 = no reduction of lift"),
                 DescriptorRow("WindMultiplier", "How much wind affects the aircraft. Scaled 1.5x in windy weather and 1.25x in rain, snow, or sandstorms, and none while landed or wrecked. Wind affects helicopters only while a player flies them. Separate from turbulence"),
                 DescriptorRow("MoveResistance", "Linear velocity damping: Air resistance proportional to speed. Halved while a door is open. Separate from InitialDragCoefficient"),
-                DescriptorRow("TurnResistanceX", string.Format(DESC_AXIS_FLYING_TURN_RESISTANCE, "X")),
-                DescriptorRow("TurnResistanceY", string.Format(DESC_AXIS_FLYING_TURN_RESISTANCE, "Y") + DESC_FLYING_TURN_RESISTANCE_Y_PLANES),
-                DescriptorRow("TurnResistanceZ", string.Format(DESC_AXIS_FLYING_TURN_RESISTANCE, "Z")),
-                DescriptorRow("SpeedResistanceY", string.Format(DESC_AXIS_SPEED_RESISTANCE, "Y")),
-                DescriptorRow("SpeedResistanceZ", string.Format(DESC_AXIS_SPEED_RESISTANCE, "Z")),
-                DescriptorRow("SpeedResistanceX", string.Format(DESC_AXIS_SPEED_RESISTANCE, "X")),
+                DescriptorRow("TurnResistanceX", "Angular velocity damping on the X axis. Slows rotation. Higher = rotation stops sooner"),
+                DescriptorRow("TurnResistanceY", "Angular velocity damping on the Y axis. Slows rotation. Higher = rotation stops sooner. Planes add 5x roll damping while there is no roll input"),
+                DescriptorRow("TurnResistanceZ", "Angular velocity damping on the Z axis. Slows rotation. Higher = rotation stops sooner"),
+                DescriptorRow("SpeedResistanceY", "Resistance to rotation on the Y axis that grows with rotation speed. Higher = stronger"),
+                DescriptorRow("SpeedResistanceZ", "Resistance to rotation on the Z axis that grows with rotation speed. Higher = stronger"),
+                DescriptorRow("SpeedResistanceX", "Resistance to rotation on the X axis that grows with rotation speed. Higher = stronger"),
                 DescriptorRow("GearDoorFrontOpen", "Angle in degrees of the front landing gear door while retracted"),
                 DescriptorRow("GearDoorRearOpen", "Angle in degrees of the rear landing gear doors (bones RL1 and RR1) while retracted"),
                 DescriptorRow("GearDoorRearOpen2", "Angle in degrees of the second rear landing gear doors (bones RL2 and RR2, opposite sign) while retracted"),

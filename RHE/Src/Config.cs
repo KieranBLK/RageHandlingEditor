@@ -54,7 +54,7 @@ namespace RHE
         private void ApplyIniDefaults()
         {
             menuActionModifier = Keys.Tab;
-            keyToggleMenu = Keys.None;
+            keyToggleMenu = Keys.F6;
             enableCheatString = DEFAULT_CHEAT_STRING;
             autoRespawnMode = AutoRespawnMode.Delayed;
             resetAllSettings = false;

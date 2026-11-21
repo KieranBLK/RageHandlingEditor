@@ -6,7 +6,7 @@ namespace RHE
     {
         // [Descriptions: Main Menu Rows] Descriptions of the main menu's rows
         private const string DESC_SELECT_VEHICLE  = "Enter selection mode: Aim at a vehicle and left click or press Enter to target it for editing in another editor";
-        private const string DESC_UNLOAD_VEHICLE  = "Forcefully prune the scoped vehicle from memory so edits that don't apply live can take effect. Every existing instance in the world will be deleted and traffic will be disabled until the process is complete. It'll be auto respawned if it unloads within 1 second, otherwise you'll get a notification when it's ready to be respawned";
+        private const string DESC_UNLOAD_VEHICLE  = "Unload the scoped vehicle from memory so edits that don't apply live can take effect without having to restart the game. Every existing instance in the world will be deleted and traffic will be disabled until the process is complete. It'll be auto respawned if it unloads within one second, otherwise you'll get a notification when it's ready";
         private const string DESC_RESPAWN_VEHICLE = "Respawn the scoped vehicle. Current physics state and customizations will be restored";
         private const string DESC_SAVED_HANDLINGS = "Browse, preview, compare, and manage exported handlings";
         private const string DESC_SAVE            = "Export the current handling to a file";
@@ -19,59 +19,43 @@ namespace RHE
         private const string DESC_REORDER_SLOT_LIVE           = "Hold your configured modifier key and press PageUp or Down to shift this slot up or down in the array";
         private const string DESC_REORDER_SLOT_PHANTOM        = "Hold your configured modifier and press PageUp or Down to reorder the highlighted slot";
 
-        // [Descriptions: Categories] The Delete text of a live category row the game reads as required
-        private const string DESC_CATEGORY_REQUIRED_LIVE = "This vehicle type needs this SubData, so deleting it will only exclude it from saves";
+        // [Descriptions: Categories] The Delete text of a live category row the game reads as required, or one this vehicle type keeps phantom only
+        private const string DESC_CATEGORY_REQUIRED_LIVE     = "This vehicle type needs this SubData, so deleting it will only exclude it from saves";
+        private const string DESC_CATEGORY_PHANTOM_ONLY_LIVE = "This SubData can't be deleted or created live on this vehicle type, as it would crash the game, so deleting it will only exclude it from saves";
 
         // [Descriptions: Saved Handlings And Search] Descriptions of the Saved Handlings list rows and the Search rows
         private const string DESC_AUTOSAVES_ROW      = "Browse autosaved handlings";
         private const string DESC_NO_AUTOSAVES       = "Autosave writes here after every change while it is on";
         private const string DESC_NO_SAVED_HANDLINGS = "Save one from the main menu";
-        private const string DESC_SEARCH             = "Browse from a list of all available handlings and preview, apply, or copy specific values from them";
+        private const string DESC_SEARCH             = "Browse from a list of all available handlings to preview, apply, or copy specific values from them";
         private const string DESC_NEW_SEARCH         = "Narrow the list by model name. Submitting a blank prompt clears the previous query";
 
         // [Descriptions: Preview Rows] Description of a Preview row that copies its value
         private const string DESC_COPY_VALUE = "Press Enter to copy this value to the current handling";
 
         // [Descriptions: Settings] Row descriptions that are not their INI comment
-        // They cover Logging Verbosity, Prompt On Save, Disable Descriptors Updates, the About row, and the visualization checkboxes
-        private const string DESC_LOGGING_VERBOSITY           = "How much detail is recorded in the log file. Warn/Error = Default";
-        private const string DESC_PROMPT_ON_SAVE              = "Prompt for a handling and file name before each save, or save immediately without prompting using the vehicle's own names, even with Always Overwrite on";
-        private const string DESC_DISABLE_DESCRIPTORS_UPDATES = "Opts out of Descriptors.json being updated whenever its version changes with script updates, so your customizations are never discarded";
-        private const string DESC_ABOUT                       = "Built with love by KieranBLK :)" + "\nInspired by ikt's RealTimeHandlingEditor and made possible by Claude Code, ScriptHookVDotNetEnhanced, and LemonUI";
-        private const string DESC_VIS_BOUNDING_BOX            = "Draws the corners of the model's collision bound edges in green";
-        private const string DESC_VIS_CENTER_OF_MASS          = "Draws a red gizmo at the handling's CenterOfMassOffset, hidden if it matches the CenterOfGravityOffset";
-        private const string DESC_VIS_CENTER_OF_GRAVITY       = "Draws a white gizmo at the vehicle's CenterOfGravityOffset, its actual center of mass, which the game copies CenterOfMassOffset into";
-        private const string DESC_VIS_ROLL_CENTER_HEIGHTS     = "Draws red bars across the front and rear axles out past the wheels, which shift from the tire's ground contact height by RollCenterHeight";
-        private const string DESC_VIS_SUBMERGED_HEIGHT        = "Draws a blue rectangle around the vehicle at the height of PercentSubmerged. Turns red when the vehicle won't float in water";
-        private const string DESC_VIS_ANTI_ROLL_BAR           = "Draws a yellow arm on each axle whose length shows its share of AntiRollBarForce";
-        private const string DESC_VIS_WHEEL_BOUNDS            = "Draws each wheel's collision bound in green and extra bounds in blue, if it has any. Respective of actual game behavior: Typically slightly offset inwards, downwards to match SuspensionLowerLimit, and not steered unless HF_STEER_ALL_WHEELS and HF_EXT_WHEEL_BOUNDS_COL are enabled";
-        private const string DESC_VIS_SUSPENSION_LOAD         = "Draws a white gauge at each wheel. The cyan level line = that wheel's share of mass, middle = even. Red line = SpringForce, higher when it's stronger than the load placed on it. In a vehicle with more than 2 axles, the level line turns red and indicates SpringForce instead of mass";
-        private const string DESC_VIS_RUDDER_OFFSETS          = "Boats only. Draws a white line across the thrust point. Cyan line = RudderOffsetSubmerge, the point tested for the propeller being under water. Red line = RudderOffsetForce, where thrust and rudder force is applied";
-        private const string DESC_VIS_PROP_RADIUS             = "Boats only. Draws an orange cross at RudderOffsetSubmerge, representing PropRadius";
-        private const string DESC_VIS_IMPELLER                = "Boats only. Draws a purple ring at ImpellerOffset, with a downward arrow scaled by ImpellerForceMultiplier. Hidden when offset = 0";
-        private const string DESC_VIS_WATER_SAMPLES           = "Boats/Seaplanes only. Draws boxes: Light blue = samples the hull or pontoons float on. Dark blue = area of the hull probed for the samples, scaled by BoxMultipliers, from SampleTestCorrection up to SampleTop; PontoonSampleSizes/Length for seaplanes. Edits only shown after an unload";
-        private const string DESC_VIS_KEEL_SPHERES            = "Boats only. Draws 3 yellow spheres front to back, scaled by KeelSphereSize";
+        // They cover Logging Verbosity, Prompt On Save, the About row, and the visualization checkboxes
+        private const string DESC_LOGGING_VERBOSITY       = "How much detail is recorded in the log file. Warn/Error = Default";
+        private const string DESC_PROMPT_ON_SAVE          = "Prompt for a handling and file name before each save, or save immediately without prompting using the vehicle's own names, even with Always Overwrite on";
+        private const string DESC_ABOUT                   = "Built with love by KieranBLK :)" + "\nInspired by ikt's RealTimeHandlingEditor and made possible by Claude Code, ScriptHookVDotNetEnhanced, and LemonUI";
+        private const string DESC_VIS_BOUNDING_BOX        = "Draws the corners of the model's collision bound edges in green";
+        private const string DESC_VIS_CENTER_OF_MASS      = "Draws a red gizmo at the handling's CenterOfMassOffset, hidden if it matches the CenterOfGravityOffset";
+        private const string DESC_VIS_CENTER_OF_GRAVITY   = "Draws a white gizmo at the vehicle's CenterOfGravityOffset, its actual center of mass, which the game copies CenterOfMassOffset into";
+        private const string DESC_VIS_ROLL_CENTER_HEIGHTS = "Draws red bars across the front and rear axles out past the wheels, which shift from the tire's ground contact height by RollCenterHeight";
+        private const string DESC_VIS_SUBMERGED_HEIGHT    = "Draws a blue rectangle around the vehicle at the height of PercentSubmerged. Turns red when the vehicle won't float in water";
+        private const string DESC_VIS_ANTI_ROLL_BAR       = "Draws a yellow arm on each axle whose length shows its share of AntiRollBarForce";
+        private const string DESC_VIS_WHEEL_BOUNDS        = "Draws each wheel's collision bound in green and extra bounds in blue, if it has any. Respective of actual game behavior: Typically slightly offset inwards, downwards to match SuspensionLowerLimit, and not steered unless HF_STEER_ALL_WHEELS and HF_EXT_WHEEL_BOUNDS_COL are enabled";
+        private const string DESC_VIS_SUSPENSION_LOAD     = "Draws a white gauge at each wheel. The cyan level line = that wheel's share of mass, middle = even. Red line = SpringForce, higher when it's stronger than the load placed on it. In a vehicle with more than 2 axles, the level line turns red and indicates SpringForce instead of mass";
+        private const string DESC_VIS_RUDDER_OFFSETS      = "Boats only. Draws a white line across the thrust point. Cyan line = RudderOffsetSubmerge, the point tested for the propeller being under water. Red line = RudderOffsetForce, where thrust and rudder force is applied";
+        private const string DESC_VIS_PROP_RADIUS         = "Boats only. Draws an orange cross at RudderOffsetSubmerge, representing PropRadius";
+        private const string DESC_VIS_IMPELLER            = "Boats only. Draws a purple ring at ImpellerOffset, with a downward arrow scaled by ImpellerForceMultiplier. Hidden when offset = 0";
+        private const string DESC_VIS_WATER_SAMPLES       = "Boats/Seaplanes only. Draws boxes: Light blue = samples the hull or pontoons float on. Dark blue = area of the hull probed for the samples, scaled by BoxMultipliers, from SampleTestCorrection up to SampleTop; PontoonSampleSizes/Length for seaplanes. Edits only shown after an unload";
+        private const string DESC_VIS_KEEL_SPHERES        = "Boats only. Draws 3 yellow spheres front to back, scaled by KeelSphereSize";
 
         // [Descriptions: Row Prefixes And Suffix] Text added to the front or the end of a row's own description
         private const string DESC_UNAVAILABLE_ON_BUILD_PREFIX   = "Unavailable on this game build. ";
         private const string DESC_WORKS_UPSIDE_DOWN_LOCK_PREFIX = "~y~Locked on: This vehicle has no misc_e bone and would crash the game in hover mode.~s~ ";
         private const string DESC_WEAPON_HASH_TYPING_HINT       = " Press Enter to type a name in manually: Accepts game name, menu display name, or hex";
-
-        // [Descriptions: Descriptor Notes] Compiled default descriptions that repeat across a vector's axis rows or across categories
-        // Each {0} is the row's own axis letter, so every axis row reads its own letter and keeps the shared note once
-        private const string DESC_AXIS_CENTER_OF_MASS_OFFSET   = "Offset along the {0} axis from the model's center." + "\n~y~Note: The game resets the entity property (CenterOfGravityOffset) to the value the handling loaded with on a repair, a part breaking off, an extra toggling, or when a door opens, so this requires an unload to apply (except for bikes)";
-        private const string DESC_AXIS_INERTIA_MULTIPLIER      = "Resistance to rotation around the {0} axis. No effect on planes, helicopters, boats, submarines, and bicycles. Requires an unload to apply";
-        private const string DESC_AXIS_BOAT_TURN_RESISTANCE    = "Resistance to rotation in water on the {0} axis";
-        private const string DESC_AXIS_FLYING_TURN_RESISTANCE  = "Angular velocity damping on the {0} axis. Slows rotation. Higher = rotation stops sooner";
-        private const string DESC_AXIS_SPEED_RESISTANCE        = "Resistance to rotation on the {0} axis that grows with rotation speed. Higher = stronger";
-        // AngularDamping's {0} appears twice, in its own axis and in the name of the minimum row it blends toward
-        private const string DESC_AXIS_ANGULAR_DAMPING         = "Rotation damping for the {0} axis while hovering. With SF_REDUCE_DRAG_WITH_SPEED, it blends toward AngularDampingMin{0} as forward speed rises";
-        private const string DESC_AXIS_ANGULAR_DAMPING_MIN     = "Minimum rotation damping for the {0} axis at high speed while hovering when SF_REDUCE_DRAG_WITH_SPEED is set";
-        private const string DESC_AXIS_LINEAR_DAMPING_MIN      = "Minimum movement damping for the {0} axis at high speed while hovering when SF_REDUCE_DRAG_WITH_SPEED is set";
-        // Flying's Y turn resistance row adds this after its axis text
-        private const string DESC_FLYING_TURN_RESISTANCE_Y_PLANES = ". Planes add 5x roll damping while there is no roll input";
-        // The same text on every Submarine turn resistance row, since it names no axis
-        private const string DESC_SUBMARINE_TURN_RESISTANCE = "Resistance to rotation in water, per axis, doubled unless the model has articulated doors. Requires an unload to apply";
 
         // [Titles: Main And Editor Menus] Row titles and banners of the main menu and the editor trees
         private const string TITLE_EDIT_CURRENT_NAMED    = "Edit {0} (Current)";
@@ -100,46 +84,45 @@ namespace RHE
         private const string TITLE_NO_SAVED_HANDLINGS = "No saved handlings";
 
         // [Titles: Settings] Row titles, section headers, and list values of the Settings menu
-        private const string TITLE_ACTION_MODIFIER             = "Action Modifier";
-        private const string TITLE_TOGGLE_MENU_KEY             = "Toggle Menu Key";
-        private const string TITLE_CHEAT_STRING                = "Cheat String";
-        private const string TITLE_AUTO_RESPAWN                = "Auto Respawn";
-        private const string TITLE_RESET_ALL_SETTINGS          = "Reset All Settings";
-        private const string TITLE_ALWAYS_OVERWRITE            = "Always Overwrite";
-        private const string TITLE_PROMPT_ON_SAVE              = "Prompt On Save";
-        private const string TITLE_AUTOSAVE                    = "Autosave";
-        private const string TITLE_PREVIEW_BY_DEFAULT          = "Preview By Default";
-        private const string TITLE_SHOW_PREVIEW_DIFF           = "Show Preview Diff";
-        private const string TITLE_BANNER_COLOR                = "Banner Color";
-        private const string TITLE_MENU_POSITION               = "Position";
-        private const string TITLE_MAX_ROWS                    = "Max Rows";
-        private const string TITLE_REASSERT_DRIFTED_FIELDS     = "Reassert Drifted Fields";
-        private const string TITLE_LOGGING_VERBOSITY           = "Logging Verbosity";
-        private const string TITLE_CLEAR_LOG_ON_RELOAD         = "Clear Log On Reload";
-        private const string TITLE_DISABLE_DESCRIPTORS_UPDATES = "Disable Descriptors Updates";
-        private const string TITLE_ABOUT                       = "About";
-        private const string TITLE_SECTION_SCRIPT              = "Script";
-        private const string TITLE_SECTION_EXPORTING           = "Exporting";
-        private const string TITLE_SECTION_HANDLING_PREVIEW    = "Handling Preview";
-        private const string TITLE_SECTION_VISUALIZATION       = "Visualization";
-        private const string TITLE_SECTION_APPEARANCE          = "Menu Appearance";
-        private const string TITLE_SECTION_EXPERIMENTAL        = "Experimental";
-        private const string TITLE_SECTION_DEBUG               = "Debug";
-        private const string TITLE_EXP_LIVE_SUBHANDLINGDATA    = "Live SubHandlingData";
-        private const string TITLE_VIS_ISOLATED_DRAWING        = "Isolated Drawing";
-        private const string TITLE_VIS_BOUNDING_BOX            = "Bounding Box";
-        private const string TITLE_VIS_CENTER_OF_MASS          = "Center-Of-Mass";
-        private const string TITLE_VIS_CENTER_OF_GRAVITY       = "Center-Of-Gravity";
-        private const string TITLE_VIS_ROLL_CENTER_HEIGHTS     = "RollCenter Heights";
-        private const string TITLE_VIS_SUBMERGED_HEIGHT        = "Submerged Height";
-        private const string TITLE_VIS_ANTI_ROLL_BAR           = "Anti-RollBar";
-        private const string TITLE_VIS_WHEEL_BOUNDS            = "Wheel Bounds";
-        private const string TITLE_VIS_SUSPENSION_LOAD         = "Suspension Load";
-        private const string TITLE_VIS_RUDDER_OFFSETS          = "Rudder Offsets";
-        private const string TITLE_VIS_PROP_RADIUS             = "Prop Radius";
-        private const string TITLE_VIS_IMPELLER                = "Impeller";
-        private const string TITLE_VIS_WATER_SAMPLES           = "Water Samples";
-        private const string TITLE_VIS_KEEL_SPHERES            = "Keel Spheres";
+        private const string TITLE_ACTION_MODIFIER          = "Action Modifier";
+        private const string TITLE_TOGGLE_MENU_KEY          = "Toggle Menu Key";
+        private const string TITLE_CHEAT_STRING             = "Cheat String";
+        private const string TITLE_AUTO_RESPAWN             = "Auto Respawn";
+        private const string TITLE_RESET_ALL_SETTINGS       = "Reset All Settings";
+        private const string TITLE_ALWAYS_OVERWRITE         = "Always Overwrite";
+        private const string TITLE_PROMPT_ON_SAVE           = "Prompt On Save";
+        private const string TITLE_AUTOSAVE                 = "Autosave";
+        private const string TITLE_PREVIEW_BY_DEFAULT       = "Preview By Default";
+        private const string TITLE_SHOW_PREVIEW_DIFF        = "Show Preview Diff";
+        private const string TITLE_BANNER_COLOR             = "Banner Color";
+        private const string TITLE_MENU_POSITION            = "Position";
+        private const string TITLE_MAX_ROWS                 = "Max Rows";
+        private const string TITLE_REASSERT_DRIFTED_FIELDS  = "Reassert Drifted Fields";
+        private const string TITLE_LOGGING_VERBOSITY        = "Logging Verbosity";
+        private const string TITLE_CLEAR_LOG_ON_RELOAD      = "Clear Log On Reload";
+        private const string TITLE_ABOUT                    = "About";
+        private const string TITLE_SECTION_SCRIPT           = "Script";
+        private const string TITLE_SECTION_EXPORTING        = "Exporting";
+        private const string TITLE_SECTION_HANDLING_PREVIEW = "Handling Preview";
+        private const string TITLE_SECTION_VISUALIZATION    = "Visualization";
+        private const string TITLE_SECTION_APPEARANCE       = "Menu Appearance";
+        private const string TITLE_SECTION_EXPERIMENTAL     = "Experimental";
+        private const string TITLE_SECTION_DEBUG            = "Debug";
+        private const string TITLE_EXP_LIVE_SUBHANDLINGDATA = "Live SubHandlingData";
+        private const string TITLE_VIS_ISOLATED_DRAWING     = "Isolated Drawing";
+        private const string TITLE_VIS_BOUNDING_BOX         = "Bounding Box";
+        private const string TITLE_VIS_CENTER_OF_MASS       = "Center-Of-Mass";
+        private const string TITLE_VIS_CENTER_OF_GRAVITY    = "Center-Of-Gravity";
+        private const string TITLE_VIS_ROLL_CENTER_HEIGHTS  = "RollCenter Heights";
+        private const string TITLE_VIS_SUBMERGED_HEIGHT     = "Submerged Height";
+        private const string TITLE_VIS_ANTI_ROLL_BAR        = "Anti-RollBar";
+        private const string TITLE_VIS_WHEEL_BOUNDS         = "Wheel Bounds";
+        private const string TITLE_VIS_SUSPENSION_LOAD      = "Suspension Load";
+        private const string TITLE_VIS_RUDDER_OFFSETS       = "Rudder Offsets";
+        private const string TITLE_VIS_PROP_RADIUS          = "Prop Radius";
+        private const string TITLE_VIS_IMPELLER             = "Impeller";
+        private const string TITLE_VIS_WATER_SAMPLES        = "Water Samples";
+        private const string TITLE_VIS_KEEL_SPHERES         = "Keel Spheres";
 
         // [Titles: Search] Banner and row title of the vehicle model search
         private const string TITLE_SEARCH     = "Search";
@@ -174,14 +157,11 @@ namespace RHE
         private const string PLACEHOLDER_CATEGORY_NOT_CREATED     = "This category has not been created yet. Press Enter to create it. ~y~Does not apply live";
         private const string PLACEHOLDER_DIFF_NOT_PRESENT         = "Not in the original handling";
 
-        // [Notifications: System] Toasts for settings, INI, descriptor, and error events
-        private const string NOTIF_ERROR_MESSAGE        = "~r~RHE: {0}";
-        private const string NOTIF_SETTINGS_RESET       = "~g~RHE: All settings reset to defaults";
-        private const string NOTIF_INI_RELOADED         = "~g~RHE: INI reloaded";
-        private const string NOTIF_INI_REJECTED         = "~y~RHE: Invalid INI value(s) rejected, check log";
-        private const string NOTIF_DESCRIPTORS_UPDATED  = "~g~RHE: Descriptors.json updated with new content. Old file preserved";
-        private const string NOTIF_DESCRIPTORS_RELOADED = "~g~RHE: Descriptors reloaded";
-        private const string NOTIF_DESCRIPTORS_REPAIRED = "~y~RHE: Descriptors file was malformed and was repaired with salvageable custom entries";
+        // [Notifications: System] Toasts for settings, INI, and error events
+        private const string NOTIF_ERROR_MESSAGE  = "~r~RHE: {0}";
+        private const string NOTIF_SETTINGS_RESET = "~g~RHE: All settings reset to defaults";
+        private const string NOTIF_INI_RELOADED   = "~g~RHE: INI reloaded";
+        private const string NOTIF_INI_REJECTED   = "~y~RHE: Invalid INI value(s) rejected, check log";
 
         // [Notifications: Input And Editing] Toasts for typed entry, key rebinding, value bounds, and the arm-then-confirm cue
         private const string NOTIF_VALUE_BOUNDED              = "~y~RHE: Value bounded to {0}";
@@ -261,6 +241,7 @@ namespace RHE
         private const string NOTIF_NO_VEHICLE_RESPAWN      = "~y~RHE: Get in a vehicle to respawn it";
         private const string NOTIF_RESPAWN_MODEL_LOADING   = "~y~RHE: Model still loading. Try again in a moment";
         private const string NOTIF_NO_VEHICLE_UNLOAD       = "~y~RHE: Get in a vehicle to unload it";
+        private const string NOTIF_TRAIN_REFUSED           = "~y~RHE: Trains can't be respawned or unloaded as they would crash the game";
         private const string NOTIF_SELECT_NONE             = "~y~RHE: No vehicle in view";
         private const string NOTIF_SELECTION_CANCELED      = "~y~RHE: Selection canceled";
 
@@ -279,6 +260,8 @@ namespace RHE
         private const string NOTIF_LIVE_CATEGORY_DELETED            = "~g~RHE: {0} Handling deleted";
         private const string NOTIF_LIVE_CATEGORY_DELETED_RESPAWN    = "~y~RHE: {0} Handling deleted. Use Respawn Vehicle to apply it";
         private const string NOTIF_LIVE_CATEGORY_DELETE_FAILED      = "~y~RHE: {0} Handling could not be deleted: {1}";
+        private const string NOTIF_SEA_PLANE_DELETE_IN_WATER        = "~y~RHE: Remove any vehicle using this handling from or near the water before deleting, the game will crash otherwise";
+        private const string NOTIF_SEA_PLANE_DELETED_UNLOAD         = "~y~RHE: SeaPlaneHandling deleted. Unload this vehicle before entering the water with it or it'll crash the game";
         private const string NOTIF_LIVE_CATEGORY_REQUIRED_EXCLUDED  = "~y~RHE: {0} Handling can't be deleted live on this vehicle type, excluded from next save instead";
         private const string NOTIF_LIVE_CATEGORY_CREATED_HOVER_HINT = "RHE: Hold the vehicle roof control (H by default) to switch hover mode";
         private const string NOTIF_LIVE_ADVANCEDDATA_FAILED         = "~y~RHE: AdvancedData entry could not be added live: {0}";
@@ -304,6 +287,7 @@ namespace RHE
         private const string REASON_NOT_PRESENT        = "It is no longer on the vehicle";
         private const string REASON_LIVE_UNAVAILABLE   = "Live creation is unavailable";
         private const string REASON_VALUES_NOT_WRITTEN = "Its values could not be written";
+        private const string REASON_REQUIRED_CATEGORY  = "The game reads it as required on this vehicle type, so removing it would crash the game";
 
         // [Notifications: Search] Toasts for the vehicle model search
         private const string NOTIF_SEARCH_TOO_SHORT         = "~y~RHE: Type at least {0} characters to search";
@@ -362,14 +346,8 @@ namespace RHE
         private const string HANDLING_NAME_MISMATCH_COMMENT = " This name may not match the vehicle's handlingId in vehicles.meta, double check it after pasting to avoid game crashing ";
 
         // [Paths] Files and folders the script reads and writes, relative to the game folder
-        // The descriptors file
-        private const string DESCRIPTORS_PATH = "scripts\\RageHandlingEditor\\Descriptors.json";
-        // The descriptors file's own file name ends in this extension, and a backup of it takes the same one
-        private const string DESCRIPTORS_FILE_EXTENSION = ".json";
-        // The suffix added to the descriptors file's name for the copy of a damaged file that holds it only while the repair runs
-        private const string DESCRIPTORS_DAMAGED_BACKUP_SUFFIX = "_bad.json";
-        // The name of the backup a version change makes of the replaced file, which takes a 2-digit number once that name is taken
-        private const string DESCRIPTORS_VERSION_BACKUP_NAME = "Descriptors_old";
+        // The script's own folder, created at startup so its file watcher has a folder to watch on a first run
+        private const string SCRIPT_FOLDER_PATH = "scripts\\RageHandlingEditor";
         // Written by the RageMemoryBridge plugin at game init, one entry per registered vehicle model with its model name and handling id
         // The only place a full model name or handling id exists at runtime, since the game keeps just the hashes. The bare file name resolves against the game folder
         private const string MODEL_METADATA_FILE_PATH = "ModelMetaData.json";
@@ -426,7 +404,7 @@ namespace RHE
         // [Controls]
         private const string CMT_CTL_MenuActionModifier1 = "Held alongside the HUD's hotkeys while the menu is open";
         private const string CMT_CTL_MenuActionModifier2 = "Options: Control, Shift, Alt, or Tab";
-        private const string CMT_CTL_EnableCheatString   = "Secondary access: String typed into the tilde key cheat menu that also opens the menu. Leave empty to disable it";
+        private const string CMT_CTL_EnableCheatString   = "String typed into the game's cheat field that also opens the menu. Leave empty to disable it";
         private const string CMT_CTL_KeyToggleMenu       = "Opens/closes the editor. Leave empty to unbind it";
         // [Script]
         private const string CMT_SCR_AutoRespawn1 = "Off, Instant, or Delayed. Respawns the vehicle after an edit to anything that only takes effect after one";
@@ -440,7 +418,7 @@ namespace RHE
         private const string CMT_EXG_PromptOnSave    = "True asks for a handling name and a file name before each save. False saves at once under the vehicle's own names, even with Always Overwrite on";
         // [HandlingPreview]
         private const string CMT_HPV_PreviewByDefault = "Show the Preview pane in the Saved Handlings menu by default";
-        private const string CMT_HPV_ShowPreviewDiff  = "Shows an additional pane next to Preview which shows the difference between the original handling and the currently highlighted saved handling for comparison";
+        private const string CMT_HPV_ShowPreviewDiff  = "Shows an additional pane next to Preview which shows the difference between the original handling and the highlighted export, for comparison";
         // [Visualization]
         private const string CMT_VIS_IsolatedDrawing            = "Draws a visualizer only while a field it represents is highlighted, to reduce visual clutter";
         private const string CMT_VIS_ShowHandlingVisualization1 = "Which visualization elements to draw while editing. Combine multiple with a pipe (e.g. \"Bounding | COM\")";
@@ -451,9 +429,9 @@ namespace RHE
         private const string CMT_APR_MaxRows2       = "Range: 5-15";
         private const string CMT_APR_MenuPosition   = "Right or Left";
         // [Experimental]
-        private const string CMT_EXP_LiveSubHandlingData = "Create and delete SubHandlingData live instead of just statically. Needs RageMemoryBridge.asi and falls back to static creation/deletion without it";
+        private const string CMT_EXP_LiveSubHandlingData = "Create and delete SubHandlingData live instead of just statically. Requires RageMemoryBridge.asi, falls back to static creation/deletion without it";
         // [Debug]
-        private const string CMT_DBG_AlwaysClearLogOnReload = "Clear the log on every script load instead of appending sessions";
+        private const string CMT_DBG_AlwaysClearLogOnReload = "Clear the log on every script load instead of appending sessions. Disable this whenever you run into a bug or error you want to report and don't want script reloads or game relaunches to wipe the log of any needed info";
         private const string CMT_DBG_LoggingMode            = "Modes: 0 = Warn & Error, 1 = All, 2 = Default + Perf, 3 = Default + Info";
 
         // [INI: Defaults] Compiled defaults of INI text values
@@ -541,17 +519,16 @@ namespace RHE
         // [Identifiers: Undo] Reasons undo records carry
         // The not-applied reason for a real array AdvancedData undo or redo on a build whose raw offsets are unsupported
         private const string LIVE_ADVANCED_DATA_UNSUPPORTED_REASON = "this game build does not support AdvancedData edits";
+        // The not-applied reason for a SeaPlane deletion refused while a vehicle on its handling is on or near the water
+        private const string SEA_PLANE_NEAR_WATER_REASON = "a vehicle on this handling is on or near the water, which would crash the game";
 
-        // [Identifiers: Keys] Notification and descriptors file keys
+        // [Identifiers: Keys] Notification keys
         // Notification key of the confirm hint, which is removed the moment the row disarms so it never outlasts the flash
         private const string NOTIFICATION_KEY_ARMED_ACTION_HINT = "armed_action_hint";
         // The key a notification replaces itself under and takes its cooldown from, so 2 toasts that share a key never stack
         private const string NOTIFICATION_KEY_ADVANCEDDATA_DELETE_ERROR           = "advanceddata_delete_error";
         private const string NOTIFICATION_KEY_ADVANCEDDATA_ENTRY_DELETE           = "advanceddata_entry_delete";
         private const string NOTIFICATION_KEY_DELETE_VEHICLE                      = "delete_vehicle";
-        private const string NOTIFICATION_KEY_DESCRIPTORS_RELOAD                  = "descriptors_reload";
-        private const string NOTIFICATION_KEY_DESCRIPTORS_REPAIRED                = "descriptors_repaired";
-        private const string NOTIFICATION_KEY_DESCRIPTORS_VERSION                 = "descriptors_version";
         private const string NOTIFICATION_KEY_FIELD_ENTRY_CANCELED                = "field_entry_canceled";
         private const string NOTIFICATION_KEY_FIELD_ENTRY_HARD_BOUNDED            = "field_entry_hard_bounded";
         private const string NOTIFICATION_KEY_FIELD_ENTRY_INVALID_ACTION_MODIFIER = "field_entry_invalid_action_modifier";
@@ -596,8 +573,10 @@ namespace RHE
         private const string NOTIFICATION_KEY_SELECTIVE_COPY_IDENTICAL            = "selective_copy_identical";
         private const string NOTIFICATION_KEY_SELECTIVE_COPY_NO_ROCKET_BOOST      = "selective_copy_no_rocket_boost";
         private const string NOTIFICATION_KEY_SELECTIVE_COPY_NO_TURRET            = "selective_copy_no_turret";
+        private const string NOTIFICATION_KEY_SEA_PLANE_UNLOAD_WARNING            = "sea_plane_unload_warning";
         private const string NOTIFICATION_KEY_SETTINGS_RESET                      = "settings_reset";
         private const string NOTIFICATION_KEY_SUBDATA_EXCLUSION                   = "subdata_exclusion";
+        private const string NOTIFICATION_KEY_TRAIN_REFUSED                       = "train_refused";
         private const string NOTIFICATION_KEY_UNDO_EMPTY                          = "undo_empty";
         private const string NOTIFICATION_KEY_UNDO_REDO                           = "undo_redo";
         private const string NOTIFICATION_KEY_UNDO_UNAPPLIED                      = "undo_unapplied";
@@ -613,10 +592,6 @@ namespace RHE
         private const string NOTIFICATION_KEY_PREFIX_UNLOAD           = "unload_";
         private const string NOTIFICATION_KEY_PREFIX_PHANTOM_DEFAULTS = "phantom_defaults_";
         private const string NOTIFICATION_KEY_PREFIX_ERROR            = "error:";
-        // Descriptors.json's top-level opt-out key. True keeps a file stamped with a lower version from being replaced
-        private const string DESCRIPTORS_DISABLE_UPDATES_KEY = "DisableUpdates";
-        // Descriptors.json's top-level version stamp, which the writer and the top level reader share
-        private const string DESCRIPTORS_VERSION_KEY = "Version";
 
         // [Identifiers: Log] Text the log file's own structure carries
         // Starts each session's header line, followed by the session number and a closing mark. The next load finds the highest number to continue from

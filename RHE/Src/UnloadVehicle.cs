@@ -63,6 +63,13 @@ namespace RHE
                 notifications.PostNotificationOnce(NOTIFICATION_KEY_NO_VEHICLE_UNLOAD, NOTIF_NO_VEHICLE_UNLOAD);
                 return;
             }
+            // Deleting any carriage of a running train crashes the game, and an unload deletes every instance of the model
+            if (vehicle.IsTrain)
+            {
+                logger.Log(Dbg.Level.Info, Dbg.UnloadTrainRefused(modelNames.ResolveModelName(vehicle), vehicle.Model.Hash));
+                notifications.Notify(NOTIFICATION_KEY_TRAIN_REFUSED, NOTIF_TRAIN_REFUSED);
+                return;
+            }
             Model model = vehicle.Model;
             if (pendingModelUnloads.ContainsKey(model.Hash)) return;
             string modelName = modelNames.ResolveModelName(vehicle);

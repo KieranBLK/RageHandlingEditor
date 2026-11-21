@@ -163,7 +163,7 @@ namespace RHE
             return labels;
         }
 
-        // Each item writes its field and calls WriteDefaultIni on change, except Disable Descriptors Updates, which writes Descriptors.json
+        // Each item writes its field and calls WriteDefaultIni on change
         // Groups mirror the INI sections: The unlabeled key rows ([Controls]), Script, Exporting, Handling Preview, Visualization, Appearance, and Debug
         // The About row comes last
         private void BuildSettingsMenuItems()
@@ -217,19 +217,6 @@ namespace RHE
             {
                 reassertDriftedFields = reassertDriftedFieldsItem.Checked;
                 WriteDefaultIni();
-            });
-            // Writes Descriptors.json's own DisableUpdates key, not the INI. A sync that already matches the file is skipped
-            disableDescriptorsUpdatesItem = new NativeCheckboxItem(TITLE_DISABLE_DESCRIPTORS_UPDATES, DESC_DISABLE_DESCRIPTORS_UPDATES, disableDescriptorsUpdates);
-            settingsMenu.Add(disableDescriptorsUpdatesItem);
-            SubscribeCheckboxChanged(disableDescriptorsUpdatesItem, "disableDescriptorsUpdatesItem.CheckboxChanged", () =>
-            {
-                if (disableDescriptorsUpdatesItem.Checked == disableDescriptorsUpdates) return;
-                if (LoadDescriptors(disableDescriptorsUpdatesItem.Checked))
-                {
-                    RefreshTrackedDescriptions();
-                    SyncAllMountedEditors();
-                }
-                disableDescriptorsUpdatesItem.Checked = disableDescriptorsUpdates;
             });
             resetAllSettingsItem = new NativeCheckboxItem(TITLE_RESET_ALL_SETTINGS, CMT_SCR_ResetAllSettings, resetAllSettings);
             settingsMenu.Add(resetAllSettingsItem);
@@ -420,7 +407,7 @@ namespace RHE
             settingsMenu.Add(aboutItem);
 
             // Toggle Menu Key has an empty default and keeps only Clear Input, and Reset All Settings is an action
-            // The visualization checkboxes and Disable Descriptors Updates reset through their own paths (ResetHighlightedRowToDefault)
+            // The visualization checkboxes reset through their own path (ResetHighlightedRowToDefault)
             resettableRowKeys = new Dictionary<NativeItem, string>
             {
                 { menuActionModifierItem, KEY_CTL_MenuActionModifier }, { enableCheatStringItem, KEY_CTL_EnableCheatString },
@@ -438,7 +425,7 @@ namespace RHE
         private Dictionary<NativeItem, string> resettableRowKeys;
 
         // True while Settings has a resettable row highlighted and that row's value differs from its compiled default, compared with exact case
-        // A visualization checkbox compares only its own element bit, and Disable Descriptors Updates compares the file's value with False
+        // A visualization checkbox compares only its own element bit
         // INI rows read lastSettingsSnapshot, which every successful INI write refreshes, so the hint follows the file
         private bool IsResettableRowHighlighted()
         {
@@ -446,7 +433,6 @@ namespace RHE
             NativeItem selected = settingsMenu.SelectedItem;
             // A disabled row offers no action, so it offers no reset either
             if (!selected.Enabled) return false;
-            if (selected == disableDescriptorsUpdatesItem) return disableDescriptorsUpdates;
             int visualizationIndex = Array.IndexOf(visualizationCheckboxItems, selected);
             if (visualizationIndex >= 0)
             {
@@ -461,19 +447,12 @@ namespace RHE
         }
 
         // Applies the highlighted row's default through ApplyValues, the same path an INI edit takes, so every validator runs
-        // A visualization checkbox resets only its own element bit, and Disable Descriptors Updates goes through its own row's descriptors write
+        // A visualization checkbox resets only its own element bit
         // The row sync below fires each row's own change handler, so only Autosave's marking of edited handlings needs its own call
         private void ResetHighlightedRowToDefault()
         {
             NativeItem selected = settingsMenu.SelectedItem;
             if (selected == null || resettableRowKeys == null) return;
-            if (selected == disableDescriptorsUpdatesItem)
-            {
-                logger.Log(Dbg.Level.Info, Dbg.ResetToDefault(DESCRIPTORS_DISABLE_UPDATES_KEY, "False"));
-                disableDescriptorsUpdatesItem.Checked = false;
-                StartResultFlash(selected, Color.LightGreen);
-                return;
-            }
             string key, defaultValue;
             int visualizationIndex = Array.IndexOf(visualizationCheckboxItems, selected);
             if (visualizationIndex >= 0)
@@ -510,7 +489,6 @@ namespace RHE
             }
             if (loggingModeItem != null) loggingModeItem.SelectedIndex = Math.Max(0, Math.Min(LogModeLabels.Length - 1, loggingMode));
             if (alwaysClearLogItem != null) alwaysClearLogItem.Checked = alwaysClearLogOnReload;
-            if (disableDescriptorsUpdatesItem != null) disableDescriptorsUpdatesItem.Checked = disableDescriptorsUpdates;
             if (alwaysOverwriteItem != null) alwaysOverwriteItem.Checked = alwaysOverwrite;
             if (promptOnSaveItem != null) promptOnSaveItem.Checked = promptOnSave;
             if (autosaveItem != null) autosaveItem.Checked = autosaveEnabled;

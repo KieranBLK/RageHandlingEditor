@@ -56,11 +56,7 @@ namespace RHE
             CategoryFlagsFacts flagsFacts = definition.FlagsMenu;
             NativeMenu flagsMenu = MakeMenu(TITLE_EDIT_HANDLING, string.Format(SUBTITLE_EXPORT_ONLY, flagsFacts.RowTitle));
             row.PhantomFlagsMenu = flagsMenu;
-            if (flagsFacts.MenuDescriptionKey != null)
-            {
-                flagsMenu.Description = ResolveDescriptor(definition.Name, flagsFacts.MenuDescriptionKey);
-                TrackMenuDescription(flagsMenu, definition.Name, flagsFacts.MenuDescriptionKey);
-            }
+            if (flagsFacts.MenuDescriptionKey != null) flagsMenu.Description = ResolveDescriptor(definition.Name, flagsFacts.MenuDescriptionKey);
             var flagBindings = new List<FlagCheckboxBinding>();
             // Shared by every per-toggle checkbox and the periodic resync below, so both paths update the exact same subtitle the exact same way
             Action<uint> updateFlagsName = flagsValue => flagsMenu.Name = FlagsMenuName(flagsFacts.SubtitleTemplate, flagsValue, flagsFacts.Entries);
@@ -113,7 +109,6 @@ namespace RHE
                 var seatItem = new NativeDynamicItem<string>("WeaponSeat", ResolveDescriptor(CATEGORY_WEAPON, "WeaponSeat"), VehicleSeatNames[0]);
                 stringCyclerItems.Add(seatItem);
                 AddTreeRow(set.Menu, seatItem);
-                TrackDescription(seatItem, CATEGORY_WEAPON);
                 set.SeatItem = seatItem;
                 WirePhantomWeaponSeatCycler(seatItem, targetSlot, slotIndex);
                 yield return true;
@@ -122,7 +117,6 @@ namespace RHE
                     var modTypeItem = new NativeDynamicItem<string>("WeaponVehicleModType", ResolveDescriptor(CATEGORY_WEAPON, "WeaponVehicleModType"), VehicleModTypeNames[0]);
                     stringCyclerItems.Add(modTypeItem);
                     AddTreeRow(set.Menu, modTypeItem);
-                    TrackDescription(modTypeItem, CATEGORY_WEAPON);
                     set.ModTypeItem = modTypeItem;
                     WirePhantomWeaponModTypeCycler(modTypeItem, targetSlot, slotIndex);
                     yield return true;

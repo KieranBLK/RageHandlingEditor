@@ -476,7 +476,6 @@ namespace RHE
             string title = ResolveFieldTitle(category, entry.Tag);
             var item = new NativeDynamicItem<DisplayFloat>(title, ResolveDescriptor(category, title));
             AddTreeRow(menu, item);
-            TrackDescription(item, category);
             var template = new PhantomFieldEdit(StructuralKind.PhantomFloat, category, entry.Tag, null, null, null);
             WireFloatField(item, entry, BuildElementFloatStore(menu, item, owner, () => owner.Phantom.CurrentPhantomElement, entry.Tag, "value", template));
         }
@@ -486,7 +485,6 @@ namespace RHE
             string title = ResolveFieldTitle(category, entry.Tag);
             var item = new NativeDynamicItem<int>(title, ResolveDescriptor(category, title));
             AddTreeRow(menu, item);
-            TrackDescription(item, category);
             var template = new PhantomFieldEdit(StructuralKind.PhantomInt, category, entry.Tag, null, null, null);
             WireIntField(item, entry, BuildElementIntStore(menu, item, owner, () => owner.Phantom.CurrentPhantomElement, entry.Tag, "value", template));
         }
@@ -503,7 +501,6 @@ namespace RHE
             string title = ResolveFieldTitle(category, entry.Tag) + component.ToUpperInvariant();
             var item = new NativeDynamicItem<DisplayFloat>(title, ResolveDescriptor(category, title));
             AddTreeRow(menu, item);
-            TrackDescription(item, category);
             var template = new PhantomFieldEdit(StructuralKind.PhantomVector, category, entry.Tag, component, null, null);
             WireFloatField(item, entry, BuildElementFloatStore(menu, item, owner, () => owner.Phantom.CurrentPhantomElement, entry.Tag, component, template));
         }
@@ -545,12 +542,11 @@ namespace RHE
         private void WirePhantomFlagCheckbox(NativeMenu menu, EditorContext owner, string descriptorCategory, string elementCategory, string fieldName, int bitIndex, List<FlagCheckboxBinding> bindings, Action<uint> onFlagsChanged = null)
         {
             string elementName = ResolveCategoryDefinition(elementCategory).FlagsMenu.ElementName;
-            string prefix = FlagHashPrefix(bitIndex);
-            var item = new NativeCheckboxItem(StripFlagPrefix(fieldName), prefix + ResolveDescriptor(descriptorCategory, fieldName), false);
+            string baseDescription = ResolveDescriptor(descriptorCategory, fieldName);
+            var item = new NativeCheckboxItem(StripFlagPrefix(fieldName), FlagHashPrefix(bitIndex) + baseDescription, false);
             DimCheckboxWhileDisabled(item);
             AddTreeRow(menu, item);
-            TrackedItemDescription tracked = TrackDescription(item, descriptorCategory, fieldName, prefix);
-            bindings.Add(new FlagCheckboxBinding { Item = item, BitIndex = bitIndex, Tracked = tracked });
+            bindings.Add(new FlagCheckboxBinding { Item = item, BitIndex = bitIndex, BaseDescription = baseDescription });
             RegisterUndoFocusItem(PhantomFlagEdit.BuildFocusKey(elementCategory, fieldName, bitIndex), item);
             SubscribeCheckboxChanged(item, "WirePhantomFlagCheckbox.CheckboxChanged", () =>
             {

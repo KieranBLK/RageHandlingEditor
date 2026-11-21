@@ -126,7 +126,6 @@ namespace RHE
         private NativeCheckboxItem[] visualizationCheckboxItems;
         private NativeListItem<string> loggingModeItem;
         private NativeCheckboxItem alwaysClearLogItem;
-        private NativeCheckboxItem disableDescriptorsUpdatesItem;
         private NativeListItem<string> autoRespawnItem;
         private NativeCheckboxItem resetAllSettingsItem;
         private StyledSeparator settingsScriptSep;
@@ -226,8 +225,8 @@ namespace RHE
         }
 
         // Reflects the live flags value on sync. BitIndex is the authoritative bit position, independent of the item's display order in its menu
-        // Tracked is the row's tracked description on the live tree and null on an export-only row. A row lock leads it with its reason
-        private class FlagCheckboxBinding { public NativeCheckboxItem Item; public int BitIndex; public TrackedItemDescription Tracked; }
+        // BaseDescription is the row's description without its hex prefix, which a row lock leads with its reason
+        private class FlagCheckboxBinding { public NativeCheckboxItem Item; public int BitIndex; public string BaseDescription; }
         // Decouples a flag's display order (its position in a FlagNameEntry[] array) from its bit index
         // Related flags can then be grouped together in the menu without disturbing the underlying bitmask, and array position never implies bit index
         private struct FlagNameEntry

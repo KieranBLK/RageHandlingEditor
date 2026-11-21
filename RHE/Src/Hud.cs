@@ -77,6 +77,29 @@ namespace RHE
         private static readonly string[] WheelHubBoneNames = { "wheel_lf", "wheel_rf", "wheel_lr", "wheel_rr", "wheel_lm1", "wheel_rm1", "wheel_lm2", "wheel_rm2", "wheel_lm3", "wheel_rm3" };
         // The bones whose average position is a boat's thrust point
         private static readonly string[] BoatPropBoneNames = { "static_prop", "static_prop2" };
+        // The sine and cosine of each of the VISUALIZATION_RING_SEGMENTS + 1 points around a ring, so finished rings and spokes read a table every frame
+        private static readonly float[] RingSegmentSines = BuildRingSegmentTable(true);
+        private static readonly float[] RingSegmentCosines = BuildRingSegmentTable(false);
+        // One API argument per color component value, reused by every visualizer line, where the API's line call creates a new argument object per component per line
+        private static readonly GTA.Native.InputArgument[] ColorComponentArguments = BuildColorComponentArguments();
+
+        private static float[] BuildRingSegmentTable(bool sine)
+        {
+            var table = new float[VISUALIZATION_RING_SEGMENTS + 1];
+            for (int i = 0; i < table.Length; i++)
+            {
+                double angle = i * 2.0 * System.Math.PI / VISUALIZATION_RING_SEGMENTS;
+                table[i] = (float)(sine ? System.Math.Sin(angle) : System.Math.Cos(angle));
+            }
+            return table;
+        }
+
+        private static GTA.Native.InputArgument[] BuildColorComponentArguments()
+        {
+            var arguments = new GTA.Native.InputArgument[256];
+            for (int i = 0; i < arguments.Length; i++) arguments[i] = i;
+            return arguments;
+        }
 
         // A build slot's own build seconds const. A new element needs its own case
         // The default case returns a positive duration, so a slot with no element keeps its build at 0 with no division by zero
@@ -139,6 +162,12 @@ namespace RHE
             private readonly System.Func<HandlingVisualizationElements> readShowHandlingVisualization;
             // The elements the setting shows, read once at the start of each draw so every element of one frame agrees
             private HandlingVisualizationElements showHandlingVisualization;
+            // The placement inputs of the vehicle drawing now, read once when its draw starts, since each is a native call or a memory read
+            // Every point and gauge of one draw shares them: The vehicle's matrix, the camera's position, and how far the vehicle moved in the last frame
+            private static int drawVehicleHandle;
+            private static Matrix drawMatrix;
+            private static Vector3 drawCameraPosition;
+            private static Vector3 drawFrameMotion;
             // A wheel's main bound is its lowest-index child and any extra bound follows it. RefreshWheelBoundShapes rereads each type and box per tick
             private struct WheelBoundInfo { public int Wheel; public int Child; public int BoundType; public Vector3 BoxMin; public Vector3 BoxMax; public bool IsExtra; }
             // A water sample's offset is in its bound component's frame
@@ -161,6 +190,8 @@ namespace RHE
                 // One per BoatPropBoneNames entry, and a bone the model lacks reads IsValid False
                 public EntityBone[] PropBones = new EntityBone[2];
                 public WheelBoundInfo[] WheelBounds = new WheelBoundInfo[0];
+                // Ticks left before RefreshWheelBoundShapes reads the shapes again
+                public int TicksUntilShapeRefresh;
                 // The samples the vehicle's model loaded with
                 public WaterSampleInfo[] WaterSamples = new WaterSampleInfo[0];
                 // False until EnsureWaterSamples reads the cached vehicle's samples, so only a vehicle that draws Water Samples reads them
@@ -271,6 +302,7 @@ namespace RHE
                 cache.WheelBounds = new WheelBoundInfo[0];
                 cache.WaterSamplesRead = false;
                 MatchWheelBounds(cache, vehicle, modelHash);
+                cache.TicksUntilShapeRefresh = VISUALIZATION_WHEEL_BOUND_SHAPE_REFRESH_TICKS;
             }
 
             // The vehicle's composite collision bound, read fresh each call, since the game can swap a vehicle's bound for its own copy (a bike's cloned bounds)
@@ -337,13 +369,13 @@ namespace RHE
                 return false;
             }
 
-            // One column of a composite child's current matrix, in the vehicle's own frame. Column 0 is right, 1 forward, 2 up, 3 position
-            private static bool ReadCompositeMatrixColumn(System.IntPtr composite, int child, int column, out Vector3 value)
+            // A composite child's current matrix, in the vehicle's own frame, read as one span
+            private static bool ReadCompositeMatrix(System.IntPtr composite, int child, out Vector3 right, out Vector3 forward, out Vector3 up, out Vector3 position)
             {
-                value = Vector3.Zero;
+                right = forward = up = position = Vector3.Zero;
                 System.IntPtr matrices;
                 if (!RawMemory.ReadRawIntPtr(composite, CompositeBoundLayout.CurrentMatrices, out matrices) || matrices == System.IntPtr.Zero) return false;
-                return RawMemory.ReadRawVector3(matrices, child * CompositeBoundLayout.MatrixStride + column * CompositeBoundLayout.MatrixColumnStride, out value);
+                return RawMemory.ReadRawMatrixColumns(matrices, child * CompositeBoundLayout.MatrixStride, CompositeBoundLayout.MatrixColumnStride, out right, out forward, out up, out position);
             }
 
             // Pass 1: A disc or cylinder child belongs to the nearest hub that is within the child's own reach, measured across the vehicle's X and Y
@@ -375,13 +407,13 @@ namespace RHE
                 {
                     System.IntPtr childBound;
                     int typeBits;
-                    Vector3 boxMin, boxMax, position;
+                    Vector3 boxMin, boxMax, right, forward, up, position;
                     if (!RawMemory.ReadRawIntPtr(childBounds, child * System.IntPtr.Size, out childBound) || childBound == System.IntPtr.Zero) continue;
                     if (!RawMemory.ReadRawInt32(childBound, BoundLayout.Type, out typeBits)) continue;
                     int boundType = typeBits & 0xFF;
                     if (boundType != BoundLayout.TypeDisc && boundType != BoundLayout.TypeCylinder) continue;
                     if (!RawMemory.ReadRawVector3(childBound, BoundLayout.BoxMin, out boxMin) || !RawMemory.ReadRawVector3(childBound, BoundLayout.BoxMax, out boxMax)) continue;
-                    if (!ReadCompositeMatrixColumn(composite, child, 3, out position)) continue;
+                    if (!ReadCompositeMatrix(composite, child, out right, out forward, out up, out position)) continue;
                     Vector3 span = boxMax - boxMin;
                     float reach = System.Math.Max(span.X, System.Math.Max(span.Y, span.Z)) * 0.5f;
                     int nearestWheel = -1;
@@ -477,9 +509,11 @@ namespace RHE
                 bound.BoxMax = boxMax;
             }
 
+            // A refresh every VISUALIZATION_WHEEL_BOUND_SHAPE_REFRESH_TICKS shows a changed shape within a fraction of a second, at a fraction of a per-frame read's cost
             private void RefreshWheelBoundShapes(VisualizationCache cache, Vehicle vehicle)
             {
-                if (cache.WheelBounds.Length == 0) return;
+                if (cache.WheelBounds.Length == 0 || --cache.TicksUntilShapeRefresh > 0) return;
+                cache.TicksUntilShapeRefresh = VISUALIZATION_WHEEL_BOUND_SHAPE_REFRESH_TICKS;
                 System.IntPtr composite;
                 if (!ResolveCompositeBound(vehicle, out composite)) return;
                 short childCount;
@@ -527,10 +561,17 @@ namespace RHE
                 return Color.FromArgb((int)(from.R + (to.R - from.R) * blend), (int)(from.G + (to.G - from.G) * blend), (int)(from.B + (to.B - from.B) * blend));
             }
 
+            // Every visualizer line goes through here
+            // It calls the native with the reused color arguments, since World.DrawLine creates an argument object for each of its 10 values on every line
+            private static void DrawLine(Vector3 from, Vector3 to, Color color)
+            {
+                GTA.Native.Function.Call(GTA.Native.Hash.DRAW_LINE, from.X, from.Y, from.Z, to.X, to.Y, to.Z, ColorComponentArguments[color.R], ColorComponentArguments[color.G], ColorComponentArguments[color.B], ColorComponentArguments[color.A]);
+            }
+
             private static void DrawGrowingLine(Vector3 anchor, Vector3 end, float progress, Color color)
             {
                 if (progress <= 0.0f) return;
-                World.DrawLine(anchor, anchor + (end - anchor) * progress, color);
+                DrawLine(anchor, anchor + (end - anchor) * progress, color);
             }
 
             // A finished line draws whole, since 2 halves meeting end to end leave a dark dot where they join
@@ -538,7 +579,7 @@ namespace RHE
             {
                 if (progress >= 1.0f)
                 {
-                    World.DrawLine(from, to, color);
+                    DrawLine(from, to, color);
                     return;
                 }
                 Vector3 middle = (from + to) * 0.5f;
@@ -551,7 +592,7 @@ namespace RHE
             {
                 if (progress >= 1.0f)
                 {
-                    World.DrawLine(from, to, color);
+                    DrawLine(from, to, color);
                     return;
                 }
                 Vector3 middle = (from + to) * 0.5f;
@@ -625,6 +666,10 @@ namespace RHE
                 if (!HasAnyBuild(state)) return;
                 VisualizationCache cache = state.Cache;
                 EnsureVisualizationCache(cache, vehicle);
+                drawVehicleHandle = vehicle.Handle;
+                drawMatrix = vehicle.Matrix;
+                drawCameraPosition = GameplayCamera.Position;
+                drawFrameMotion = vehicle.Velocity * deltaTime;
                 if (state.Builds[BuildSlot(HandlingVisualizationElements.WheelBounds)] > 0.0f) RefreshWheelBoundShapes(cache, vehicle);
                 UpdateVisualizationGlides(vehicle, handling, state, snapGlides ? 1.0f : 1.0f - (float)System.Math.Exp(-deltaTime / VISUALIZATION_GLIDE_TIME_CONSTANT));
                 Vector3 min = cache.BoundsMin;
@@ -748,7 +793,7 @@ namespace RHE
                 if ((showHandlingVisualization & HandlingVisualizationElements.SuspensionLoad) != 0)
                 {
                     VisualizationCache cache = state.Cache;
-                    float measuredCenterDistance = MeasureCameraDistance(vehicle, vehicle.GetOffsetPosition((cache.BoundsMin + cache.BoundsMax) * 0.5f));
+                    float measuredCenterDistance = MeasureCameraDistance(vehicle, ToWorld(vehicle, (cache.BoundsMin + cache.BoundsMax) * 0.5f));
                     state.GaugeCameraDistance = state.GaugeCameraDistance <= 0.0f ? measuredCenterDistance : Glide(state.GaugeCameraDistance, measuredCenterDistance, blend);
                     int wheelCount = cache.Wheels.Length;
                     float ratioBlend = blend;
@@ -898,10 +943,10 @@ namespace RHE
                 {
                     Vector3 cornerLocal = new Vector3((corner & 1) == 0 ? min.X : max.X, (corner & 2) == 0 ? min.Y : max.Y, (corner & 4) == 0 ? min.Z : max.Z);
                     Vector3 towardOpposite = new Vector3(((corner & 1) == 0 ? max.X : min.X) - cornerLocal.X, ((corner & 2) == 0 ? max.Y : min.Y) - cornerLocal.Y, ((corner & 4) == 0 ? max.Z : min.Z) - cornerLocal.Z) * VISUALIZATION_BRACKET_FRACTION;
-                    Vector3 cornerWorld = vehicle.GetOffsetPosition(cornerLocal);
-                    DrawGrowingLine(cornerWorld, vehicle.GetOffsetPosition(cornerLocal + new Vector3(towardOpposite.X, 0.0f, 0.0f)), build, VISUALIZATION_BOX_COLOR);
-                    DrawGrowingLine(cornerWorld, vehicle.GetOffsetPosition(cornerLocal + new Vector3(0.0f, towardOpposite.Y, 0.0f)), build, VISUALIZATION_BOX_COLOR);
-                    DrawGrowingLine(cornerWorld, vehicle.GetOffsetPosition(cornerLocal + new Vector3(0.0f, 0.0f, towardOpposite.Z)), build, VISUALIZATION_BOX_COLOR);
+                    Vector3 cornerWorld = ToWorld(vehicle, cornerLocal);
+                    DrawGrowingLine(cornerWorld, ToWorld(vehicle, cornerLocal + new Vector3(towardOpposite.X, 0.0f, 0.0f)), build, VISUALIZATION_BOX_COLOR);
+                    DrawGrowingLine(cornerWorld, ToWorld(vehicle, cornerLocal + new Vector3(0.0f, towardOpposite.Y, 0.0f)), build, VISUALIZATION_BOX_COLOR);
+                    DrawGrowingLine(cornerWorld, ToWorld(vehicle, cornerLocal + new Vector3(0.0f, 0.0f, towardOpposite.Z)), build, VISUALIZATION_BOX_COLOR);
                 }
             }
 
@@ -924,11 +969,11 @@ namespace RHE
 
             private static void DrawAxisHalf(Vehicle vehicle, Vector3 centerLocal, Vector3 endLocal, Vector3 tickHalfLocal, float axisProgress, float tickProgress, Color color)
             {
-                Vector3 center = vehicle.GetOffsetPosition(centerLocal);
-                Vector3 end = vehicle.GetOffsetPosition(endLocal);
+                Vector3 center = ToWorld(vehicle, centerLocal);
+                Vector3 end = ToWorld(vehicle, endLocal);
                 DrawGrowingLine(center, end, axisProgress, color);
-                DrawGrowingLine(end, vehicle.GetOffsetPosition(endLocal + tickHalfLocal), tickProgress, color);
-                DrawGrowingLine(end, vehicle.GetOffsetPosition(endLocal - tickHalfLocal), tickProgress, color);
+                DrawGrowingLine(end, ToWorld(vehicle, endLocal + tickHalfLocal), tickProgress, color);
+                DrawGrowingLine(end, ToWorld(vehicle, endLocal - tickHalfLocal), tickProgress, color);
             }
 
             // The game measures an axle's roll center height up from the tire contact points, so a post rises by RollCenterHeight from the contact point's height
@@ -959,8 +1004,8 @@ namespace RHE
                     for (int side = 0; side < sideCount; side++)
                     {
                         Vector3 baseLocal = new Vector3(ResolveSidePlaneX(wheelSides[side], min, max) + wheelSides[side] * VISUALIZATION_ROLL_POST_SIDE_OFFSET, hubLocal.Y, baseZ);
-                        top = vehicle.GetOffsetPosition(baseLocal + rise);
-                        World.DrawLine(vehicle.GetOffsetPosition(baseLocal), top, VISUALIZATION_ROLL_COLOR);
+                        top = ToWorld(vehicle, baseLocal + rise);
+                        DrawLine(ToWorld(vehicle, baseLocal), top, VISUALIZATION_ROLL_COLOR);
                     }
                     if (boneId == VehicleWheelBoneId.WheelLeftFront)
                     {
@@ -1015,12 +1060,12 @@ namespace RHE
             {
                 Vector3 leftEndLocal = new Vector3(ResolveSidePlaneX(OutboardSide(leftHubLocal), min, max), leftHubLocal.Y, leftHubLocal.Z);
                 Vector3 rightEndLocal = new Vector3(ResolveSidePlaneX(OutboardSide(rightHubLocal), min, max), rightHubLocal.Y, rightHubLocal.Z);
-                Vector3 leftEnd = vehicle.GetOffsetPosition(leftEndLocal);
-                Vector3 rightEnd = vehicle.GetOffsetPosition(rightEndLocal);
+                Vector3 leftEnd = ToWorld(vehicle, leftEndLocal);
+                Vector3 rightEnd = ToWorld(vehicle, rightEndLocal);
                 Vector3 arm = new Vector3(0.0f, armOffsetY, 0.0f);
                 DrawLineFromMiddle(leftEnd, rightEnd, barProgress, color);
-                DrawGrowingLine(leftEnd, vehicle.GetOffsetPosition(leftEndLocal + arm), armProgress, color);
-                DrawGrowingLine(rightEnd, vehicle.GetOffsetPosition(rightEndLocal + arm), armProgress, color);
+                DrawGrowingLine(leftEnd, ToWorld(vehicle, leftEndLocal + arm), armProgress, color);
+                DrawGrowingLine(rightEnd, ToWorld(vehicle, rightEndLocal + arm), armProgress, color);
             }
 
             // A ring around the bounds at the height PercentSubmerged marks. Above 100 the vehicle sinks, so the ring glides to the top and blends to the sinking color
@@ -1053,7 +1098,7 @@ namespace RHE
 
             private static Vector3 WaterlineEdgePoint(Vehicle vehicle, Vector3 fromLocal, Vector3 toLocal, float edgeStart)
             {
-                return vehicle.GetOffsetPosition(fromLocal + (toLocal - fromLocal) * edgeStart);
+                return ToWorld(vehicle, fromLocal + (toLocal - fromLocal) * edgeStart);
             }
 
             // Every edge keeps the trim DrawWaterlineEdge applies
@@ -1083,8 +1128,7 @@ namespace RHE
                 {
                     WheelBoundInfo bound = cache.WheelBounds[boundIndex];
                     Vector3 rightLocal, forwardLocal, upLocal, positionLocal;
-                    if (!ReadCompositeMatrixColumn(composite, bound.Child, 0, out rightLocal) || !ReadCompositeMatrixColumn(composite, bound.Child, 1, out forwardLocal)) continue;
-                    if (!ReadCompositeMatrixColumn(composite, bound.Child, 2, out upLocal) || !ReadCompositeMatrixColumn(composite, bound.Child, 3, out positionLocal)) continue;
+                    if (!ReadCompositeMatrix(composite, bound.Child, out rightLocal, out forwardLocal, out upLocal, out positionLocal)) continue;
                     bool isCylinder = bound.BoundType == BoundLayout.TypeCylinder;
                     Color color = bound.IsExtra ? VISUALIZATION_EXTRA_WHEEL_BOUND_COLOR : VISUALIZATION_WHEEL_BOUND_COLOR;
                     // A disc lies flat across its own X axis and a cylinder runs along its own Y axis, and the other 2 columns span each face
@@ -1096,17 +1140,17 @@ namespace RHE
                     Vector3 centerLocal = positionLocal + rightLocal * boxCenter.X + forwardLocal * boxCenter.Y + upLocal * boxCenter.Z;
                     // The outer face is the one on the wheel's own side of the centerline
                     Vector3 outboardAxleLocal = axleLocal.X * OutboardSide(centerLocal) < 0.0f ? -axleLocal : axleLocal;
-                    Vector3 center = vehicle.GetOffsetPosition(centerLocal);
-                    Vector3 outerCenter = vehicle.GetOffsetPosition(centerLocal + outboardAxleLocal * halfWidth);
-                    Vector3 innerCenter = vehicle.GetOffsetPosition(centerLocal - outboardAxleLocal * halfWidth);
-                    Vector3 faceForward = (vehicle.GetOffsetPosition(centerLocal + (isCylinder ? rightLocal : forwardLocal)) - center) * radius;
-                    Vector3 faceUp = (vehicle.GetOffsetPosition(centerLocal + upLocal) - center) * radius;
+                    Vector3 center = ToWorld(vehicle, centerLocal);
+                    Vector3 outerCenter = ToWorld(vehicle, centerLocal + outboardAxleLocal * halfWidth);
+                    Vector3 innerCenter = ToWorld(vehicle, centerLocal - outboardAxleLocal * halfWidth);
+                    Vector3 faceForward = (ToWorld(vehicle, centerLocal + (isCylinder ? rightLocal : forwardLocal)) - center) * radius;
+                    Vector3 faceUp = (ToWorld(vehicle, centerLocal + upLocal) - center) * radius;
                     int links = VISUALIZATION_RING_SEGMENTS / VISUALIZATION_RING_LINES_PER_LINK;
                     for (int link = 0; link < links; link++)
                     {
-                        float angle = link * 2.0f * (float)System.Math.PI / links;
-                        Vector3 outerRim = RingPoint(outerCenter, faceForward, faceUp, angle);
-                        Vector3 innerRim = RingPoint(innerCenter, faceForward, faceUp, angle);
+                        int segment = link * VISUALIZATION_RING_LINES_PER_LINK;
+                        Vector3 outerRim = RingSegmentPoint(outerCenter, faceForward, faceUp, segment);
+                        Vector3 innerRim = RingSegmentPoint(innerCenter, faceForward, faceUp, segment);
                         DrawGrowingLine(innerCenter, innerRim, spokeProgress, color);
                         DrawGrowingLine(outerCenter, outerRim, spokeProgress, color);
                         DrawLineFromEnds(innerRim, outerRim, treadProgress, color);
@@ -1121,6 +1165,11 @@ namespace RHE
             private static void DrawRingSweep(Vector3 center, Vector3 forward, Vector3 up, float progress, Color color)
             {
                 if (progress <= 0.0f) return;
+                if (progress >= 1.0f)
+                {
+                    DrawFullRing(center, forward, up, color);
+                    return;
+                }
                 int quarterSegments = VISUALIZATION_RING_SEGMENTS / 4;
                 float quarterTurn = (float)System.Math.PI * 0.5f;
                 float step = quarterTurn / quarterSegments;
@@ -1130,10 +1179,10 @@ namespace RHE
                     float start = i * step;
                     if (start >= sweep) break;
                     float end = System.Math.Min(sweep, start + step);
-                    World.DrawLine(RingPoint(center, forward, up, start), RingPoint(center, forward, up, end), color);
-                    World.DrawLine(RingPoint(center, forward, up, -start), RingPoint(center, forward, up, -end), color);
-                    World.DrawLine(RingPoint(center, forward, up, 2.0f * quarterTurn - start), RingPoint(center, forward, up, 2.0f * quarterTurn - end), color);
-                    World.DrawLine(RingPoint(center, forward, up, 2.0f * quarterTurn + start), RingPoint(center, forward, up, 2.0f * quarterTurn + end), color);
+                    DrawLine(RingPoint(center, forward, up, start), RingPoint(center, forward, up, end), color);
+                    DrawLine(RingPoint(center, forward, up, -start), RingPoint(center, forward, up, -end), color);
+                    DrawLine(RingPoint(center, forward, up, 2.0f * quarterTurn - start), RingPoint(center, forward, up, 2.0f * quarterTurn - end), color);
+                    DrawLine(RingPoint(center, forward, up, 2.0f * quarterTurn + start), RingPoint(center, forward, up, 2.0f * quarterTurn + end), color);
                 }
             }
 
@@ -1141,6 +1190,11 @@ namespace RHE
             private static void DrawRingRisingFromBottom(Vector3 center, Vector3 side, Vector3 up, float progress, Color color)
             {
                 if (progress <= 0.0f) return;
+                if (progress >= 1.0f)
+                {
+                    DrawFullRing(center, side, up, color);
+                    return;
+                }
                 int halfSegments = VISUALIZATION_RING_SEGMENTS / 2;
                 float halfTurn = (float)System.Math.PI;
                 float step = halfTurn / halfSegments;
@@ -1150,8 +1204,8 @@ namespace RHE
                     float start = i * step;
                     if (start >= sweep) break;
                     float end = System.Math.Min(sweep, start + step);
-                    World.DrawLine(RingPoint(center, side, up, halfTurn - start), RingPoint(center, side, up, halfTurn - end), color);
-                    World.DrawLine(RingPoint(center, side, up, halfTurn + start), RingPoint(center, side, up, halfTurn + end), color);
+                    DrawLine(RingPoint(center, side, up, halfTurn - start), RingPoint(center, side, up, halfTurn - end), color);
+                    DrawLine(RingPoint(center, side, up, halfTurn + start), RingPoint(center, side, up, halfTurn + end), color);
                 }
             }
 
@@ -1164,8 +1218,7 @@ namespace RHE
                 float quarterTurn = (float)System.Math.PI * 0.5f;
                 if (progress >= 1.0f)
                 {
-                    float segmentTurn = 4.0f * quarterTurn / VISUALIZATION_RING_SEGMENTS;
-                    for (int i = 0; i < VISUALIZATION_RING_SEGMENTS; i++) World.DrawLine(RingPoint(center, forward, side, i * segmentTurn), RingPoint(center, forward, side, (i + 1) * segmentTurn), color);
+                    DrawFullRing(center, forward, side, color);
                     return;
                 }
                 int eighthSegments = VISUALIZATION_RING_SEGMENTS / 8;
@@ -1181,8 +1234,8 @@ namespace RHE
                         float start = i * step;
                         if (start >= sweep) break;
                         float end = System.Math.Min(sweep, start + step);
-                        World.DrawLine(RingPoint(center, forward, side, quarterStart + start), RingPoint(center, forward, side, quarterStart + end), color);
-                        World.DrawLine(RingPoint(center, forward, side, quarterEnd - start), RingPoint(center, forward, side, quarterEnd - end), color);
+                        DrawLine(RingPoint(center, forward, side, quarterStart + start), RingPoint(center, forward, side, quarterStart + end), color);
+                        DrawLine(RingPoint(center, forward, side, quarterEnd - start), RingPoint(center, forward, side, quarterEnd - end), color);
                     }
                 }
             }
@@ -1193,11 +1246,38 @@ namespace RHE
                 return center + forward * (float)System.Math.Sin(angle) + up * (float)System.Math.Cos(angle);
             }
 
+            // The ring point at a whole segment, read from the table. Segment 0 is the top, as with RingPoint's angle 0
+            private static Vector3 RingSegmentPoint(Vector3 center, Vector3 forward, Vector3 up, int segment)
+            {
+                return center + forward * RingSegmentSines[segment] + up * RingSegmentCosines[segment];
+            }
+
+            // A finished ring draws the same VISUALIZATION_RING_SEGMENTS lines its build ends on, as one loop that places each point once
+            private static void DrawFullRing(Vector3 center, Vector3 forward, Vector3 up, Color color)
+            {
+                Vector3 previous = RingSegmentPoint(center, forward, up, 0);
+                for (int segment = 1; segment <= VISUALIZATION_RING_SEGMENTS; segment++)
+                {
+                    Vector3 next = RingSegmentPoint(center, forward, up, segment);
+                    DrawLine(previous, next, color);
+                    previous = next;
+                }
+            }
+
             // Measures to where the point stood one frame ago, since the script reads the camera as of the previous frame but the vehicle as of this one
             // Otherwise a moving vehicle reads farther by its speed times the frame time, which grows the gauges with speed and flickers them with every frame time change
+            // A vehicle other than the one drawing now reads its own camera position and motion
             private static float MeasureCameraDistance(Vehicle vehicle, Vector3 worldPoint)
             {
-                return Vector3.Distance(GameplayCamera.Position, worldPoint - vehicle.Velocity * Game.LastFrameTime);
+                return vehicle.Handle == drawVehicleHandle ? Vector3.Distance(drawCameraPosition, worldPoint - drawFrameMotion) : Vector3.Distance(GameplayCamera.Position, worldPoint - vehicle.Velocity * Game.LastFrameTime);
+            }
+
+            // The vehicle's matrix places the point the same way the game's offset native does, a rotation plus the position with no scale, with no native call per point
+            // The matrix is row-major, with the rotation in its first 3 rows and the position in its 4th
+            private static Vector3 ToWorld(Vehicle vehicle, Vector3 local)
+            {
+                Matrix matrix = vehicle.Handle == drawVehicleHandle ? drawMatrix : vehicle.Matrix;
+                return new Vector3(local.X * matrix.M11 + local.Y * matrix.M21 + local.Z * matrix.M31 + matrix.M41, local.X * matrix.M12 + local.Y * matrix.M22 + local.Z * matrix.M32 + matrix.M42, local.X * matrix.M13 + local.Y * matrix.M23 + local.Z * matrix.M33 + matrix.M43);
             }
 
             // A gauge's height is VISUALIZATION_GAUGE_SIZE_FRACTION of the larger of the bounding box diagonal and its own camera distance, and its scale is at least 1
@@ -1219,7 +1299,7 @@ namespace RHE
                 if (wheelCount == 0 || state.SuspensionLoadRatios.Length != wheelCount) return;
                 Vector3 across, upward;
                 ResolveCameraFacingBasis(vehicle, out across, out upward);
-                Vector3 boxCenter = vehicle.GetOffsetPosition((min + max) * 0.5f);
+                Vector3 boxCenter = ToWorld(vehicle, (min + max) * 0.5f);
                 float diagonal = (max - min).Length();
                 float centerDistance = MeasureCameraDistance(vehicle, boxCenter);
                 float smoothedCenterDistance = state.GaugeCameraDistance;
@@ -1257,7 +1337,7 @@ namespace RHE
                     int sideCount = ResolveWheelSides(hubLocal);
                     for (int side = 0; side < sideCount; side++)
                     {
-                        Vector3 gaugeCenter = vehicle.GetOffsetPosition(new Vector3(ResolveSidePlaneX(wheelSides[side], min, max) + wheelSides[side] * sideOffset, hubLocal.Y, hubLocal.Z));
+                        Vector3 gaugeCenter = ToWorld(vehicle, new Vector3(ResolveSidePlaneX(wheelSides[side], min, max) + wheelSides[side] * sideOffset, hubLocal.Y, hubLocal.Z));
                         Vector3 bottomLeft = gaugeCenter - height * 0.5f - halfWidth;
                         Vector3 bottomRight = gaugeCenter - height * 0.5f + halfWidth;
                         DrawLineFromMiddle(bottomLeft, bottomRight, bottomProgress, VISUALIZATION_SUSPENSION_LOAD_COLOR);
@@ -1265,7 +1345,7 @@ namespace RHE
                         DrawGrowingLine(bottomRight, bottomRight + height, poleProgress, VISUALIZATION_SUSPENSION_LOAD_COLOR);
                         DrawLineFromEnds(bottomLeft + height, bottomRight + height, topProgress, VISUALIZATION_SUSPENSION_LOAD_COLOR);
                         DrawLineFromEnds(bottomLeft + level, bottomRight + level, levelDrawProgress, state.SuspensionLoadFromWeight ? VISUALIZATION_SUSPENSION_LOAD_LEVEL_COLOR : VISUALIZATION_SUSPENSION_LOAD_BIAS_COLOR);
-                        if (drawBiasLine && biasLength > biasGap) World.DrawLine(bottomLeft + halfWidth + level + biasSpan * (biasGap / biasLength), bottomLeft + halfWidth + springLevel, VISUALIZATION_SUSPENSION_LOAD_BIAS_COLOR);
+                        if (drawBiasLine && biasLength > biasGap) DrawLine(bottomLeft + halfWidth + level + biasSpan * (biasGap / biasLength), bottomLeft + halfWidth + springLevel, VISUALIZATION_SUSPENSION_LOAD_BIAS_COLOR);
                     }
                 }
             }
@@ -1297,11 +1377,11 @@ namespace RHE
                 Vector3 stubHalf = new Vector3(VISUALIZATION_RUDDER_STUB_HALF_LENGTH, 0.0f, 0.0f);
                 Vector3 leftLocal = thrustLocal - stubHalf;
                 Vector3 rightLocal = thrustLocal + stubHalf;
-                Vector3 left = vehicle.GetOffsetPosition(leftLocal);
-                Vector3 right = vehicle.GetOffsetPosition(rightLocal);
+                Vector3 left = ToWorld(vehicle, leftLocal);
+                Vector3 right = ToWorld(vehicle, rightLocal);
                 DrawLineFromMiddle(left, right, stubProgress, VISUALIZATION_RUDDER_STUB_COLOR);
-                DrawGrowingLine(left, vehicle.GetOffsetPosition(leftLocal + new Vector3(0.0f, 0.0f, state.RudderOffsetSubmerge)), lineProgress, VISUALIZATION_RUDDER_SUBMERGE_COLOR);
-                DrawGrowingLine(right, vehicle.GetOffsetPosition(rightLocal + new Vector3(0.0f, 0.0f, state.RudderOffsetForce)), lineProgress, VISUALIZATION_RUDDER_FORCE_COLOR);
+                DrawGrowingLine(left, ToWorld(vehicle, leftLocal + new Vector3(0.0f, 0.0f, state.RudderOffsetSubmerge)), lineProgress, VISUALIZATION_RUDDER_SUBMERGE_COLOR);
+                DrawGrowingLine(right, ToWorld(vehicle, rightLocal + new Vector3(0.0f, 0.0f, state.RudderOffsetForce)), lineProgress, VISUALIZATION_RUDDER_FORCE_COLOR);
             }
 
             // The cross is centered on the propeller's water test point (the thrust point moved up by RudderOffsetSubmerge), with arms PropRadius long
@@ -1310,13 +1390,13 @@ namespace RHE
             {
                 if (state.PropRadius <= 0.0f) return;
                 Vector3 centerLocal = ResolveThrustPointLocal(vehicle, state, min) + new Vector3(0.0f, 0.0f, state.RudderOffsetSubmerge);
-                Vector3 center = vehicle.GetOffsetPosition(centerLocal);
+                Vector3 center = ToWorld(vehicle, centerLocal);
                 Vector3 armUp = new Vector3(0.0f, 0.0f, state.PropRadius);
                 Vector3 armRight = new Vector3(state.PropRadius, 0.0f, 0.0f);
-                DrawGrowingLine(center, vehicle.GetOffsetPosition(centerLocal + armUp), build, VISUALIZATION_PROP_RADIUS_COLOR);
-                DrawGrowingLine(center, vehicle.GetOffsetPosition(centerLocal - armUp), build, VISUALIZATION_PROP_RADIUS_COLOR);
-                DrawGrowingLine(center, vehicle.GetOffsetPosition(centerLocal + armRight), build, VISUALIZATION_PROP_RADIUS_COLOR);
-                DrawGrowingLine(center, vehicle.GetOffsetPosition(centerLocal - armRight), build, VISUALIZATION_PROP_RADIUS_COLOR);
+                DrawGrowingLine(center, ToWorld(vehicle, centerLocal + armUp), build, VISUALIZATION_PROP_RADIUS_COLOR);
+                DrawGrowingLine(center, ToWorld(vehicle, centerLocal - armUp), build, VISUALIZATION_PROP_RADIUS_COLOR);
+                DrawGrowingLine(center, ToWorld(vehicle, centerLocal + armRight), build, VISUALIZATION_PROP_RADIUS_COLOR);
+                DrawGrowingLine(center, ToWorld(vehicle, centerLocal - armRight), build, VISUALIZATION_PROP_RADIUS_COLOR);
             }
 
             // The impeller pulls only for handling that drives the rear wheels, which is the game's jet drive rule
@@ -1337,17 +1417,17 @@ namespace RHE
                 float ringProgress = BuildPhase(build, 0.0f, VISUALIZATION_IMPELLER_RING_BUILD_SHARE);
                 float arrowProgress = BuildPhase(build, VISUALIZATION_IMPELLER_RING_BUILD_SHARE, 1.0f);
                 Vector3 pointLocal = new Vector3(0.0f, min.Y * state.ImpellerOffset, 0.0f);
-                Vector3 point = vehicle.GetOffsetPosition(pointLocal);
-                Vector3 ringForward = vehicle.GetOffsetPosition(pointLocal + new Vector3(0.0f, GAME_IMPELLER_RADIUS, 0.0f)) - point;
-                Vector3 ringSide = vehicle.GetOffsetPosition(pointLocal + new Vector3(GAME_IMPELLER_RADIUS, 0.0f, 0.0f)) - point;
+                Vector3 point = ToWorld(vehicle, pointLocal);
+                Vector3 ringForward = ToWorld(vehicle, pointLocal + new Vector3(0.0f, GAME_IMPELLER_RADIUS, 0.0f)) - point;
+                Vector3 ringSide = ToWorld(vehicle, pointLocal + new Vector3(GAME_IMPELLER_RADIUS, 0.0f, 0.0f)) - point;
                 DrawRingSweep(point, ringForward, ringSide, ringProgress, VISUALIZATION_IMPELLER_COLOR);
                 float arrowLength = System.Math.Min(System.Math.Max(0.0f, state.ImpellerForceMultiplier) * VISUALIZATION_IMPELLER_ARROW_METERS_PER_UNIT, max.Z - min.Z);
                 if (arrowLength <= 0.0f) return;
                 Vector3 tipLocal = pointLocal - new Vector3(0.0f, 0.0f, arrowLength);
-                Vector3 tip = vehicle.GetOffsetPosition(tipLocal);
+                Vector3 tip = ToWorld(vehicle, tipLocal);
                 DrawGrowingLine(point, tip, arrowProgress, VISUALIZATION_IMPELLER_COLOR);
-                DrawGrowingLine(tip, vehicle.GetOffsetPosition(tipLocal + new Vector3(VISUALIZATION_IMPELLER_ARROW_HEAD_LENGTH, 0.0f, VISUALIZATION_IMPELLER_ARROW_HEAD_LENGTH)), arrowProgress, VISUALIZATION_IMPELLER_COLOR);
-                DrawGrowingLine(tip, vehicle.GetOffsetPosition(tipLocal + new Vector3(-VISUALIZATION_IMPELLER_ARROW_HEAD_LENGTH, 0.0f, VISUALIZATION_IMPELLER_ARROW_HEAD_LENGTH)), arrowProgress, VISUALIZATION_IMPELLER_COLOR);
+                DrawGrowingLine(tip, ToWorld(vehicle, tipLocal + new Vector3(VISUALIZATION_IMPELLER_ARROW_HEAD_LENGTH, 0.0f, VISUALIZATION_IMPELLER_ARROW_HEAD_LENGTH)), arrowProgress, VISUALIZATION_IMPELLER_COLOR);
+                DrawGrowingLine(tip, ToWorld(vehicle, tipLocal + new Vector3(-VISUALIZATION_IMPELLER_ARROW_HEAD_LENGTH, 0.0f, VISUALIZATION_IMPELLER_ARROW_HEAD_LENGTH)), arrowProgress, VISUALIZATION_IMPELLER_COLOR);
             }
 
             // The volume the game lays its 5 by 5 water sample probe grid in, centered on the model origin
@@ -1360,10 +1440,10 @@ namespace RHE
                 float halfLength = 0.5f * (max.Y * state.BoxFrontMultiplier - min.Y * state.BoxRearMultiplier);
                 float bottom = min.Z + state.SampleBottomTestCorrection * (max.Z - min.Z);
                 Vector3 centerLocal = new Vector3(0.0f, 0.0f, 0.5f * (bottom + state.SampleTop));
-                Vector3 center = vehicle.GetOffsetPosition(centerLocal);
-                Vector3 halfRight = vehicle.GetOffsetPosition(centerLocal + new Vector3(halfWidth, 0.0f, 0.0f)) - center;
-                Vector3 halfForward = vehicle.GetOffsetPosition(centerLocal + new Vector3(0.0f, halfLength, 0.0f)) - center;
-                Vector3 halfUp = vehicle.GetOffsetPosition(centerLocal + new Vector3(0.0f, 0.0f, 0.5f * (state.SampleTop - bottom))) - center;
+                Vector3 center = ToWorld(vehicle, centerLocal);
+                Vector3 halfRight = ToWorld(vehicle, centerLocal + new Vector3(halfWidth, 0.0f, 0.0f)) - center;
+                Vector3 halfForward = ToWorld(vehicle, centerLocal + new Vector3(0.0f, halfLength, 0.0f)) - center;
+                Vector3 halfUp = ToWorld(vehicle, centerLocal + new Vector3(0.0f, 0.0f, 0.5f * (state.SampleTop - bottom))) - center;
                 DrawWireBoxBottomUp(center, halfRight, halfForward, halfUp, build, VISUALIZATION_WATER_SAMPLE_BOX_COLOR);
             }
 
@@ -1388,8 +1468,7 @@ namespace RHE
                     // Consecutive samples usually share a component, so its matrix is read once for the run
                     if (sample.Component != matrixComponent)
                     {
-                        if (!ReadCompositeMatrixColumn(composite, sample.Component, 0, out rightLocal) || !ReadCompositeMatrixColumn(composite, sample.Component, 1, out forwardLocal)) continue;
-                        if (!ReadCompositeMatrixColumn(composite, sample.Component, 2, out upLocal) || !ReadCompositeMatrixColumn(composite, sample.Component, 3, out positionLocal)) continue;
+                        if (!ReadCompositeMatrix(composite, sample.Component, out rightLocal, out forwardLocal, out upLocal, out positionLocal)) continue;
                         matrixComponent = sample.Component;
                     }
                     Vector3 centerLocal = positionLocal + rightLocal * sample.Offset.X + forwardLocal * sample.Offset.Y + upLocal * sample.Offset.Z;
@@ -1402,10 +1481,10 @@ namespace RHE
                     WaterSampleFrame frame = waterSampleFrames[i];
                     if (!frame.Drawn) continue;
                     float size = samples[i].Size;
-                    Vector3 center = vehicle.GetOffsetPosition(frame.CenterLocal);
-                    Vector3 right = (vehicle.GetOffsetPosition(frame.CenterLocal + frame.RightLocal) - center) * size;
-                    Vector3 forward = (vehicle.GetOffsetPosition(frame.CenterLocal + frame.ForwardLocal) - center) * size;
-                    Vector3 up = (vehicle.GetOffsetPosition(frame.CenterLocal + frame.UpLocal) - center) * size;
+                    Vector3 center = ToWorld(vehicle, frame.CenterLocal);
+                    Vector3 right = (ToWorld(vehicle, frame.CenterLocal + frame.RightLocal) - center) * size;
+                    Vector3 forward = (ToWorld(vehicle, frame.CenterLocal + frame.ForwardLocal) - center) * size;
+                    Vector3 up = (ToWorld(vehicle, frame.CenterLocal + frame.UpLocal) - center) * size;
                     if (kind != WaterSampleKind.Keel)
                     {
                         DrawWireBoxBottomUp(center, right, forward, up, ResolveWaterSampleBuild(build, frame.CenterLocal.Z, levelCount), color);

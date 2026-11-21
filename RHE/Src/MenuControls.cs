@@ -13,12 +13,13 @@ namespace RHE
     {
         // How many menus BuildMenu registered: The global menus and Current's tree
         // An extra editor's tree joins allMenus later, in an order set by play, so its menus are addressed by their position in that tree instead
-        // A menu created at runtime (an AdvancedData entry) has no stable address at all
+        // A menu created at runtime has no stable address of its own, so an AdvancedData entry is addressed through its list
         private int initialMenuCount;
         // Where a saved menu sits. Editor 0 means a menu BuildMenu registered, by its allMenus index
         // An extra editor's index means a menu of its tree, by its position in that tree's AllOwnMenus
         // That position is the same in every tree, since every tree is built by the same steps in the same order
-        private struct MenuAddress { public int Editor; public int Position; }
+        // EntryNumber is an AdvancedData entry's 1-based number inside the addressed list, or 0 for the list or any other menu
+        private struct MenuAddress { public int Editor; public int Position; public int EntryNumber; }
         // The menu and row a previous load left open, read from its file. Position is -1 while nothing is pending, and the first tick consumes it
         private MenuAddress pendingMenuRestoreMenu = new MenuAddress { Editor = 0, Position = -1 };
         private int pendingMenuRestoreRow = -1;
@@ -191,9 +192,18 @@ namespace RHE
             return true;
         }
 
-        // A menu's stable address, or False for a menu with none: A runtime menu, or a menu of a tree whose build has not finished
+        // A menu's stable address, or False for a menu with none: A runtime menu other than an AdvancedData entry, or a menu of a tree whose build has not finished
         private bool ResolveMenuAddress(NativeMenu menu, out MenuAddress address)
         {
+            EditorContext entryOwner;
+            AdvancedDataMenuKind entryKind;
+            int entryIndex;
+            if (FindAdvancedDataListOf(menu, out entryOwner, out entryKind, out entryIndex) && entryIndex >= 0)
+            {
+                if (!ResolveMenuAddress(entryOwner.AdvancedData.Lists[(int)entryKind].ListMenu, out address)) return false;
+                address.EntryNumber = entryIndex + 1;
+                return true;
+            }
             int index = Array.IndexOf(allMenus, menu);
             if (index >= 0 && index < initialMenuCount)
             {
@@ -214,16 +224,24 @@ namespace RHE
         }
 
         // An extra editor's address is written E, its index, a period, then the position, and a menu BuildMenu registered is its bare allMenus index
+        // An AdvancedData entry follows its list's address with an at sign and the entry number
         private static string FormatMenuAddress(MenuAddress address)
         {
-            return address.Editor == 0 ? address.Position.ToString(CultureInfo.InvariantCulture) : "E" + address.Editor.ToString(CultureInfo.InvariantCulture) + "." + address.Position.ToString(CultureInfo.InvariantCulture);
+            string listText = address.Editor == 0 ? address.Position.ToString(CultureInfo.InvariantCulture) : "E" + address.Editor.ToString(CultureInfo.InvariantCulture) + "." + address.Position.ToString(CultureInfo.InvariantCulture);
+            return address.EntryNumber > 0 ? listText + "@" + address.EntryNumber.ToString(CultureInfo.InvariantCulture) : listText;
         }
 
         // A tree position is checked against Current's StartupMenuCount, since the extra trees may not be built yet when the file loads
         private bool ParseMenuAddress(string text, out MenuAddress address)
         {
             address = default(MenuAddress);
-            int editor = 0, position;
+            int editor = 0, position, entryNumber = 0;
+            int entrySeparator = text.IndexOf('@');
+            if (entrySeparator >= 0)
+            {
+                if (!int.TryParse(text.Substring(entrySeparator + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out entryNumber) || entryNumber < 1 || entryNumber > ADVANCEDDATA_COUNT_SANITY_CEILING) return false;
+                text = text.Substring(0, entrySeparator);
+            }
             string positionText = text;
             if (text.StartsWith("E", StringComparison.Ordinal))
             {
@@ -232,11 +250,57 @@ namespace RHE
                 positionText = text.Substring(separator + 1);
             }
             if (!int.TryParse(positionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out position) || position < 0 || position >= (editor == 0 ? initialMenuCount : currentContext.StartupMenuCount)) return false;
-            address = new MenuAddress { Editor = editor, Position = position };
+            address = new MenuAddress { Editor = editor, Position = position, EntryNumber = entryNumber };
             return true;
         }
 
+        // The AdvancedData list a menu belongs to, with entryIndex -1 when the menu is the list itself, or False for any other menu
+        // A tree not built yet holds no list menus to match
+        private bool FindAdvancedDataListOf(NativeMenu menu, out EditorContext owner, out AdvancedDataMenuKind kind, out int entryIndex)
+        {
+            for (int i = 0; i < editorContexts.Length; i++)
+            {
+                EditorContext context = editorContexts[i];
+                if (context.BuildState != EditorBuildState.Built) continue;
+                for (int k = 0; k < context.AdvancedData.Lists.Length; k++)
+                {
+                    AdvancedDataMenus lists = context.AdvancedData.Lists[k];
+                    int found = -2;
+                    if (lists.ListMenu == menu) found = -1;
+                    else
+                    {
+                        for (int j = 0; j < lists.Entries.Length && found == -2; j++) if (lists.Entries[j] != null && lists.Entries[j].Menu == menu) found = j;
+                    }
+                    if (found == -2) continue;
+                    owner = context;
+                    kind = (AdvancedDataMenuKind)k;
+                    entryIndex = found;
+                    return true;
+                }
+            }
+            owner = null;
+            kind = AdvancedDataMenuKind.Live;
+            entryIndex = -1;
+            return false;
+        }
+
+        // The entry menus are created by the list's sync, so the list is synced first, after PrimePhantomMenusAbove set a phantom list's element
+        // An entry the list no longer holds, since the vehicle changed between loads, leaves the list as the menu to open
+        private NativeMenu ResolveRestoredAdvancedDataEntry(NativeMenu listMenu, int entryNumber)
+        {
+            EditorContext owner;
+            AdvancedDataMenuKind kind;
+            int entryIndex;
+            if (entryNumber < 1 || !FindAdvancedDataListOf(listMenu, out owner, out kind, out entryIndex) || entryIndex != -1) return listMenu;
+            SyncAdvancedDataVisibility(owner, kind);
+            AdvancedDataMenus lists = owner.AdvancedData.Lists[(int)kind];
+            if (entryNumber > lists.ListedCount) return listMenu;
+            listMenu.SelectedIndex = entryNumber - 1;
+            return lists.Entries[entryNumber - 1].Menu;
+        }
+
         // The menu an address names, or null for an extra editor that is not mounted, which is then not reachable from the main menu either
+        // An entry address names its list here, and the restore resolves the entry once the list is synced
         private NativeMenu ResolveAddressedMenu(MenuAddress address)
         {
             if (address.Editor == 0) return address.Position < allMenus.Length ? allMenus[address.Position] : null;
@@ -326,6 +390,7 @@ namespace RHE
                 if (parent != null && parent.Items.Count > 0) parent.SelectedIndex = Math.Min(parentRow.Value, parent.Items.Count - 1);
             }
             PrimePhantomMenusAbove(saved);
+            saved = ResolveRestoredAdvancedDataEntry(saved, address.EntryNumber);
             navigation.RememberedMenu = saved;
             OpenFromEntryPoint();
             if (!saved.Visible || row < 0 || saved.Items.Count == 0) return;
@@ -334,7 +399,7 @@ namespace RHE
             if (saved != savedHandlingsMenu) return;
             ApplyPreviewPosition(previewPosition);
             // Ahead of the width stage, so a restored Diff category takes its seed before the top-level Diff menu steps away from it
-            SyncDiffMirror();
+            SyncDiffMirror(GetVisiblePreviewMenu());
         }
 
         // A phantom category menu sets its tree's phantom element and lists its AdvancedData and weapon slot rows only when shown

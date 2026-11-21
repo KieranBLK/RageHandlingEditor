@@ -237,9 +237,10 @@ namespace RHE
         // Confirms on the same hoveredVehicleForSelection the crosshair is already showing, with no separate raycast
         // A miss (nothing in view), or a vehicle whose handling is already scoped, does not exit the mode, so aiming again and confirming works without re-arming
         // A successful confirm keeps focus on Select Vehicle's own row rather than auto-navigating into the new editor
+        // The hover checks occlusion only every few ticks, so the confirm rechecks it and never selects a vehicle that just went behind something
         private void ConfirmVehicleSelection()
         {
-            if (Entity.IsNullOrNotExisting(hoveredVehicleForSelection))
+            if (Entity.IsNullOrNotExisting(hoveredVehicleForSelection) || IsSelectionTargetOccluded(lastHoverOrigin, lastHoverHit, lastHoverExcluded))
             {
                 notifications.PostNotificationOnce(NOTIFICATION_KEY_SELECT_VEHICLE_NONE, NOTIF_SELECT_NONE);
                 return;
@@ -345,6 +346,7 @@ namespace RHE
             notifications.RemoveFrozenNotification(NOTIFICATION_KEY_SELECT_VEHICLE);
             selectingVehicle = false;
             hoveredVehicleForSelection = null;
+            occlusionCheckedVehicleHandle = 0;
             ShowMenu(mainMenu);
             pendingSeatWeaponReenable = true;
         }
@@ -358,6 +360,14 @@ namespace RHE
         // The menu library's own processing already read that press earlier in the same tick
         private bool selectModeArmedThisTick;
         private Vehicle hoveredVehicleForSelection;
+        // The occlusion line runs only when the aimed vehicle changes or the recheck countdown runs out, since it is the hover's most expensive call
+        // The last line's ends are kept, so the confirm press rechecks the hovered vehicle with the same line before accepting it
+        private int occlusionCheckedVehicleHandle;
+        private int ticksUntilOcclusionRecheck;
+        private bool lastHoverOccluded;
+        private Vector3 lastHoverOrigin;
+        private Vector3 lastHoverHit;
+        private Entity lastHoverExcluded;
 
         // One-shot per tick while select mode is armed. The confirm action reads the result directly instead of raycasting again
         // Shape tests cannot hit a vehicle in superdummy physics (many parked and distant vehicles), so the ray is tested against each loaded vehicle's model bounds
@@ -379,8 +389,22 @@ namespace RHE
                 nearestVehicle = candidate;
                 nearestDistance = hitDistance;
             }
-            Entity excludeEntity = hasPlayerVehicle ? playerVehicle : null;
-            hoveredVehicleForSelection = nearestVehicle != null && !IsSelectionTargetOccluded(origin, origin + direction * nearestDistance, excludeEntity) ? nearestVehicle : null;
+            if (nearestVehicle == null)
+            {
+                occlusionCheckedVehicleHandle = 0;
+                hoveredVehicleForSelection = null;
+                return;
+            }
+            lastHoverOrigin = origin;
+            lastHoverHit = origin + direction * nearestDistance;
+            lastHoverExcluded = hasPlayerVehicle ? playerVehicle : null;
+            if (nearestVehicle.Handle != occlusionCheckedVehicleHandle || --ticksUntilOcclusionRecheck <= 0)
+            {
+                lastHoverOccluded = IsSelectionTargetOccluded(lastHoverOrigin, lastHoverHit, lastHoverExcluded);
+                occlusionCheckedVehicleHandle = nearestVehicle.Handle;
+                ticksUntilOcclusionRecheck = SELECT_VEHICLE_OCCLUSION_RECHECK_TICKS;
+            }
+            hoveredVehicleForSelection = lastHoverOccluded ? null : nearestVehicle;
         }
 
         // Slab test of the ray against the vehicle's model bounds in its own local space. A cheap bounding sphere check rejects most vehicles first

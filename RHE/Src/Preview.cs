@@ -656,8 +656,9 @@ namespace RHE
             // A panel swap hid the old panels before their turn to draw, so the new ones draw this frame in their place
             // A first open keeps the gate, since the menu that opened Saved Handlings has already drawn
             if (previouslyVisiblePreviewMenu == null) return;
-            SyncDiffMirror();
-            ReleaseFrameGate(GetVisiblePreviewMenu());
+            NativeMenu visiblePreview = GetVisiblePreviewMenu();
+            SyncDiffMirror(visiblePreview);
+            ReleaseFrameGate(visiblePreview);
             if (diffBaselineActive) ReleaseFrameGate(lastShownDiffMenu);
         }
 
@@ -819,50 +820,44 @@ namespace RHE
 
         // previewMenu sits adjacent to savedHandlingsMenu, on the side away from the screen edge
         // Its offset is recomputed every tick while both are visible, because savedHandlingsMenu's width animates
+        // The visible Preview menu is looked up once here and shared with Diff's reposition and mirror
         private void RepositionPreviewMenu()
         {
             float previewOffsetX = menuAlignLeft ? savedHandlingsMenu.Offset.X + savedHandlingsMenu.Width + PREVIEW_PANEL_SPACING : savedHandlingsMenu.Offset.X - savedHandlingsMenu.Width - PREVIEW_PANEL_SPACING;
             PointF previewOffset = new PointF(previewOffsetX, savedHandlingsMenu.Offset.Y);
-            previewMenu.Offset = previewOffset;
-            RecenterBannerText(previewMenu);
+            SetPanelOffset(previewMenu, previewOffset);
             // Only the currently visible submenu needs its Offset touched
             // Every weapon-slot menu is reached here too, since ConfigurePanelMenu registers each one into previewCategoryData
             // A separate loop over previewWeaponSlotMenus would touch a visible one twice
-            foreach (KeyValuePair<string, PreviewCategoryData> data in previewCategoryData)
-            {
-                if (data.Value.Menu.Visible)
-                {
-                    data.Value.Menu.Offset = previewOffset;
-                    RecenterBannerText(data.Value.Menu);
-                }
-            }
+            foreach (KeyValuePair<string, PreviewCategoryData> data in previewCategoryData) { if (data.Value.Menu.Visible) SetPanelOffset(data.Value.Menu, previewOffset); }
+            NativeMenu visiblePreview = GetVisiblePreviewMenu();
             // Diff has no per-tick reposition call site of its own
             // Piggybacking on Preview's (called every tick while any part of the Preview tree is visible) keeps the two from drifting out of sync
-            if (diffBaselineActive) RepositionDiffMenu();
-            SyncDiffMirror();
+            if (diffBaselineActive) RepositionDiffMenu(visiblePreview);
+            SyncDiffMirror(visiblePreview);
+        }
+
+        // The library's Offset setter recalculates every element of the menu, so an unchanged offset is never written
+        // The banner text is recentered after a write, since the recalculation moves it back to the library's own position
+        private void SetPanelOffset(NativeMenu menu, PointF offset)
+        {
+            if (menu.Offset == offset) return;
+            menu.Offset = offset;
+            RecenterBannerText(menu);
         }
 
         // Diff sits one column further out than Preview, on the same side away from Saved Handlings
-        private void RepositionDiffMenu()
+        private void RepositionDiffMenu(NativeMenu visiblePreview)
         {
             // Offsets from whichever Preview submenu is on screen, not always previewMenu's top-level width
             // A nested submenu wider or narrower than the top-level panel then still sits flush beside Diff
             // Every Preview-tree menu shares previewMenu's Offset
-            NativeMenu visiblePreview = GetVisiblePreviewMenu();
             float previewWidth = visiblePreview != null ? visiblePreview.Width : previewMenu.Width;
             float diffOffsetX = menuAlignLeft ? previewMenu.Offset.X + previewWidth + PREVIEW_PANEL_SPACING : previewMenu.Offset.X - previewWidth - PREVIEW_PANEL_SPACING;
             PointF diffOffset = new PointF(diffOffsetX, previewMenu.Offset.Y);
-            diffMenu.Offset = diffOffset;
-            RecenterBannerText(diffMenu);
+            SetPanelOffset(diffMenu, diffOffset);
             // previewDiffCategoryData already reaches every Diff weapon-slot menu too
-            foreach (KeyValuePair<string, PreviewCategoryData> data in previewDiffCategoryData)
-            {
-                if (data.Value.Menu.Visible)
-                {
-                    data.Value.Menu.Offset = diffOffset;
-                    RecenterBannerText(data.Value.Menu);
-                }
-            }
+            foreach (KeyValuePair<string, PreviewCategoryData> data in previewDiffCategoryData) { if (data.Value.Menu.Visible) SetPanelOffset(data.Value.Menu, diffOffset); }
         }
 
         // ====================
@@ -1136,14 +1131,13 @@ namespace RHE
         // This per-tick call (piggybacked on RepositionPreviewMenu) is the only way its SelectedIndex or nested-category visibility ever changes
         // Visibility is toggled only when the shown menu changes: Re-showing the same menu every tick forces a redundant Visible False to True transition
         // That transition fires the API's ResetCursor (SET_CURSOR_POSITION) and locks the hardware cursor while a diff submenu is open
-        private void SyncDiffMirror()
+        private void SyncDiffMirror(NativeMenu visiblePreview)
         {
             if (!diffBaselineActive)
             {
                 lastShownDiffMenu = null;
                 return;
             }
-            NativeMenu visiblePreview = GetVisiblePreviewMenu();
             NativeMenu target;
             int sourceIndex = 0;
             bool mirrorIndex;
@@ -1179,9 +1173,13 @@ namespace RHE
         // A Diff menu mirrors the visible Preview submenu only while every level down to it is listed in the current Diff tree and has rows,
         // since a category, slot, or entry menu the baseline lacks keeps the rows of whichever baseline last filled it
         // Anything else stays on the top-level diffMenu rather than descending into stale rows
+        // The level list is reused, since this runs every tick while a nested Preview submenu shows
+        private readonly List<NativeMenu> diffMirrorPreviewLevels = new List<NativeMenu>();
+
         private NativeMenu ResolveDiffMirrorTarget(NativeMenu visiblePreview)
         {
-            var previewLevels = new List<NativeMenu>();
+            List<NativeMenu> previewLevels = diffMirrorPreviewLevels;
+            previewLevels.Clear();
             NativeMenu level = visiblePreview;
             for (int depth = 0; level != previewMenu; depth++)
             {

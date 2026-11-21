@@ -124,7 +124,13 @@ namespace RHE
         private static bool IsLiveCreationAllowed(string category, VehicleType vehicleType)
         {
             CategoryDefinition definition = ResolveCategoryDefinition(category);
-            return definition != null && (definition.LiveAllowedTypes == null || ContainsVehicleType(definition.LiveAllowedTypes, vehicleType));
+            if (definition == null || IsPhantomOnlyOnType(definition, vehicleType)) return false;
+            return definition.CandidateTypes == null || ContainsVehicleType(definition.CandidateTypes, vehicleType);
+        }
+
+        private static bool IsPhantomOnlyOnType(CategoryDefinition definition, VehicleType vehicleType)
+        {
+            return definition.PhantomOnlyTypes != null && ContainsVehicleType(definition.PhantomOnlyTypes, vehicleType);
         }
 
         // Only a new action from the menu needs the setting, since a recorded entry or an Undo All must keep working while the plugin is present
@@ -461,7 +467,11 @@ namespace RHE
         {
             reason = "Live deletion not available for this category";
             CategoryDefinition definition = ResolveCategoryDefinition(category);
-            if (definition == null || !IsLiveDeletionAllowedFor(origin, category, vehicle)) return false;
+            if (definition == null || !IsLiveDeletionAllowedFor(origin, category, vehicle))
+            {
+                if (definition != null && IsLiveDeletionRefused(category, vehicle)) reason = REASON_REQUIRED_CATEGORY;
+                return false;
+            }
             HandlingData handling = vehicle.HandlingData;
             HandlingKey key = ResolveHandlingKey(handling);
             if (!key.IsValid) return false;
@@ -469,6 +479,11 @@ namespace RHE
             if (!IsCategoryPresent(handling, category))
             {
                 reason = "Category not present";
+                return false;
+            }
+            if (category == CATEGORY_SEA_PLANE && IsAnyVehicleOnHandlingOnOrNearWater(key))
+            {
+                reason = SEA_PLANE_NEAR_WATER_REASON;
                 return false;
             }
             XElement captured = handlingMetaXml.BuildCategoryElement(category, handling);
@@ -488,6 +503,29 @@ namespace RHE
             return true;
         }
 
+        // A model keeps the pontoon samples it baked from SeaPlane data when it loaded, so a vehicle on a handling that lost it crashes the game once it touches water
+        // The deletion acts on the handling, which every model on it shares, so every vehicle on it is checked, once per request and never per tick
+        // A helicopter floating on its pontoons does not report itself in water, so a vehicle whose underside sits just above the water counts too
+        private static bool IsAnyVehicleOnHandlingOnOrNearWater(HandlingKey key)
+        {
+            foreach (Vehicle candidate in World.GetAllVehicles())
+            {
+                if (ResolveHandlingKey(candidate).Equals(key) && IsVehicleOnOrNearWater(candidate)) return true;
+            }
+            return false;
+        }
+
+        private static bool IsVehicleOnOrNearWater(Vehicle vehicle)
+        {
+            if (vehicle.IsInWater) return true;
+            GTA.Math.Vector3 position = vehicle.Position;
+            float waterHeight;
+            if (!Water.GetWaterLevel(position, out waterHeight)) return false;
+            GTA.Math.Vector3 min, max;
+            vehicle.Model.GetDimensions(out min, out max);
+            return position.Z + min.Z - waterHeight <= SEA_PLANE_NEAR_WATER_HEIGHT;
+        }
+
         // A redo can delete a category the user excluded since, and an absent category's set toggle would read as created for saving, so the toggle is cleared
         // The vehicle keeps whatever the game built from the category when it spawned, so every deletion asks for a respawn
         private void FinishLiveCategoryDeletion(LiveRequest request)
@@ -499,6 +537,8 @@ namespace RHE
             MarkAutosavePending(request.Key);
             RefreshForHandling(request.Key);
             logger.Log(Dbg.Level.Info, Dbg.LiveSubDataDeleted(request.ModelName, request.ModelHash, request.Category));
+            // Only an unload drops the baked pontoon samples, so the warning posts on every origin, Undo All included
+            if (request.Category == CATEGORY_SEA_PLANE) notifications.Notify(NOTIFICATION_KEY_SEA_PLANE_UNLOAD_WARNING, NOTIF_SEA_PLANE_DELETED_UNLOAD);
             if (request.Origin == LiveRequestOrigin.UndoAll)
             {
                 if (request.Run != null) request.Run.Flags |= ReplayFlags.Respawn;
@@ -549,8 +589,8 @@ namespace RHE
         }
 
         // An applied handling asks for each category it carries that the vehicle lacks to be created live, with the applied element as its values
-        // The allow list reads the vehicle's type and the request needs a tree editing the handling to own it
-        // Without both the caller adopts the category as export-only
+        // The vehicle's type must be one of the category's candidate types, and the request needs a tree editing the handling to own it
+        // Without both the caller adopts the category as phantom
         private bool RequestAppliedCategoryCreation(HandlingKey key, HandlingData handling, Vehicle vehicle, string category, XElement appliedElement, XElement handlingItem, LiveRequestOrigin origin)
         {
             if (Entity.IsNullOrNotExisting(vehicle) || !handling.IsValid) return false;
@@ -563,6 +603,7 @@ namespace RHE
 
         // Each category is removed through the live deletion, since the apply's own entry or the Undo All already holds the undo
         // Returns how many could not be removed, which the caller counts as skipped fields. A category that stays still holds the applied values
+        // An Undo All lists each kept category with its own reason, since one count cannot say which category stayed or why
         private int RemoveCategoriesCreatedByApply(HandlingData handling, Vehicle vehicle, List<string> categories, LiveRequestOrigin origin)
         {
             int notRemoved = 0;
@@ -573,13 +614,14 @@ namespace RHE
                 if (!Entity.IsNullOrNotExisting(vehicle) && BeginLiveCategoryDeletion(owner, category, vehicle, null, origin, out reason)) continue;
                 notRemoved++;
                 logger.Log(Dbg.Level.Warn, Dbg.LiveSubDataAppliedCategoryKept(category, reason));
+                if (origin == LiveRequestOrigin.UndoAll) AddUndoAllFailure(undoAllRunInProgress, category + " removal", reason);
             }
             return notRemoved;
         }
 
-        // =====================
+        // ===================
         // AdvancedData growth
-        // =====================
+        // ===================
         // A Car object's AdvancedData array has a fixed capacity, so a longer list needs the plugin to grow it first
         // A growth request holds the entries to write once the capacity holds, which land from StartIndex on and set the count to StartIndex plus their number
         private static int ReadAdvancedDataEntryInt(XElement item, string name)

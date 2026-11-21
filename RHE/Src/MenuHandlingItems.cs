@@ -15,9 +15,9 @@ namespace RHE
         {
             if (entry.GetFloat != null)
             {
-                var item = new NativeDynamicItem<DisplayFloat>(entry.Title, ResolveDescriptor(category, entry.Title));
+                string baseDescription = ResolveDescriptor(category, entry.Title);
+                var item = new NativeDynamicItem<DisplayFloat>(entry.Title, baseDescription);
                 AddTreeRow(menu, item);
-                TrackedItemDescription trackedDescription = TrackDescription(item, category, item.Title, null);
                 if (entry.RequiresRocketBoost) owner.RocketBoostItems.Add(item);
                 FieldStore<float> floatStore = BuildLiveFloatStore(item, category, entry, h =>
                 {
@@ -30,7 +30,7 @@ namespace RHE
                     entry.SetFloat(data, v);
                     if (entry.Recompute != null) entry.Recompute(data, vehicle);
                     return true;
-                }, owner, keySuffix == null ? null : entry.Title + keySuffix, trackedDescription);
+                }, owner, keySuffix == null ? null : entry.Title + keySuffix, baseDescription);
                 floatStore.Reapply = BuildReapply(entry, dataResolver, owner);
                 WireFloatField(item, entry, floatStore);
                 yield return true;
@@ -48,7 +48,6 @@ namespace RHE
             {
                 var item = new NativeDynamicItem<int>(entry.Title, ResolveDescriptor(category, entry.Title));
                 AddTreeRow(menu, item);
-                TrackDescription(item, category, item.Title, null);
                 WireIntField(item, entry, BuildLiveIntStore(item, category, entry, h =>
                 {
                     TData data = dataResolver(h);
@@ -69,9 +68,9 @@ namespace RHE
         private void BuildVectorFieldMenuItem<TData>(NativeMenu menu, string category, HandlingFieldEntry<TData> entry, Func<HandlingData, TData> dataResolver, char component, string keySuffix, EditorContext owner)
         {
             string title = entry.Title + component;
-            var item = new NativeDynamicItem<DisplayFloat>(title, ResolveDescriptor(category, title));
+            string baseDescription = ResolveDescriptor(category, title);
+            var item = new NativeDynamicItem<DisplayFloat>(title, baseDescription);
             AddTreeRow(menu, item);
-            TrackedItemDescription trackedDescription = TrackDescription(item, category, item.Title, null);
             FieldStore<float> floatStore = BuildLiveFloatStore(item, category, entry, h =>
             {
                 TData data = dataResolver(h);
@@ -88,7 +87,7 @@ namespace RHE
                 entry.SetVec(data, vec);
                 if (entry.Recompute != null) entry.Recompute(data, vehicle);
                 return true;
-            }, owner, keySuffix == null ? null : title + keySuffix, trackedDescription);
+            }, owner, keySuffix == null ? null : title + keySuffix, baseDescription);
             floatStore.Reapply = BuildReapply(entry, dataResolver, owner);
             WireFloatField(item, entry, floatStore);
         }
@@ -142,6 +141,7 @@ namespace RHE
             SubscribeSelectedIndexChanged(savedHandlingsMenu, "savedHandlingsMenu.SelectedIndexChanged", e =>
             {
                 DisarmArmed();
+                RecordSearchHighlight();
                 if (!listRowAssignmentSkipsPreviewRefresh) RefreshPreviewMenu();
             });
             // Fires before the submenu item's own Activated opens Saved Handlings, so an entry from the main menu always starts on Exports
@@ -207,7 +207,7 @@ namespace RHE
 
         // WeaponHash also writes live on cycle, so the raw hash passed in is always the value that was just written, not a preview of what would be written
         private string WeaponHashDescription(uint rawHash) { return "(0x" + rawHash.ToString("X8") + ") " + WeaponHashDescription(); }
-        // The typing hint is appended here, never stored in Descriptors.json. A descriptor whose last sentence has no end mark gets a period first
+        // The typing hint is appended here, never stored in the compiled description. A description whose last sentence has no end mark gets a period first
         private string WeaponHashDescription()
         {
             string descriptor = ResolveDescriptor(CATEGORY_WEAPON, "WeaponHash").TrimEnd();
@@ -225,13 +225,11 @@ namespace RHE
             {
                 // Hex prefix on the description, not the Title, since a Title suffix would widen every flag menu
                 // RecalculateTargetWidth measures Title text like any other item
-                // The prefix is a fixed function of BitIndex, so it is composed fresh both here and in RefreshTrackedDescriptions, never baked into the JSON text itself
-                string prefix = FlagHashPrefix(entries[i].BitIndex);
-                var item = new NativeCheckboxItem(StripFlagPrefix(entries[i].Name), prefix + ResolveDescriptor(category, entries[i].Name), false);
+                string baseDescription = ResolveDescriptor(category, entries[i].Name);
+                var item = new NativeCheckboxItem(StripFlagPrefix(entries[i].Name), FlagHashPrefix(entries[i].BitIndex) + baseDescription, false);
                 DimCheckboxWhileDisabled(item);
                 AddTreeRow(menu, item);
-                TrackedItemDescription tracked = TrackDescription(item, category, entries[i].Name, prefix);
-                bindings.Add(new FlagCheckboxBinding { Item = item, BitIndex = entries[i].BitIndex, Tracked = tracked });
+                bindings.Add(new FlagCheckboxBinding { Item = item, BitIndex = entries[i].BitIndex, BaseDescription = baseDescription });
                 string fieldKeyOverride = keySuffix == null ? null : entries[i].Name + keySuffix;
                 if (isRawOffset)
                 {
@@ -325,7 +323,6 @@ namespace RHE
             // A per-slot array (atArray<CAdvancedData>) with one Entry N submenu row per real entry, listed to the vehicle's live entry count by SyncAdvancedDataVisibility
             // Every entry's own rows are built here up front, and the entry's submenu is created on first listing (EnsureAdvancedDataEntryMenu)
             liveLists.ListMenu.Description = ResolveDescriptor(CATEGORY_CAR, "AdvancedData");
-            TrackMenuDescription(liveLists.ListMenu, CATEGORY_CAR, "AdvancedData");
             // Constructed directly instead of through AddStyledSubmenu, so it stays out of the menu until the vehicle's real entry count is nonzero
             // SyncLiveAdvancedDataSlot swaps it in for the placeholder or pending submenu then
             liveLists.OpenerItem = new StyledSubmenuItem(liveLists.ListMenu, carMenu);
@@ -337,7 +334,6 @@ namespace RHE
                 var set = new AdvancedDataItemSet();
                 set.SlotItem = new NativeDynamicItem<string>(AdvancedDataRowTitle(slotIndex, "Slot"), ResolveDescriptor(CATEGORY_CAR, "AdvancedDataSlot"));
                 stringCyclerItems.Add(set.SlotItem);
-                TrackDescription(set.SlotItem, CATEGORY_CAR, "AdvancedDataSlot", null);
                 // Every getter and setter below guards slotIndex against the vehicle's real live entry count, read once per access, before calling into the raw-memory path
                 // A slot beyond that count has no real element to read (GetAdvancedDataElementAddress deliberately returns IntPtr.Zero for it)
                 // Reading or writing through it anyway trips GetRawMemoryAddress's own zero-address anomaly warning for an entirely expected case
@@ -351,7 +347,6 @@ namespace RHE
                     if (slotIndex < count) RawMemory.WriteRawInt(RawMemory.GetAdvancedDataElementAddress(h, slotIndex, count), AdvancedDataLayout.ElementSlot, v);
                 }, keySuffix == null ? null : AdvancedDataRowTitle(slotIndex, "Slot") + keySuffix, targetSlot);
                 set.IndexItem = new NativeDynamicItem<int>(AdvancedDataRowTitle(slotIndex, "Index"), ResolveDescriptor(CATEGORY_CAR, "AdvancedDataIndex"));
-                TrackDescription(set.IndexItem, CATEGORY_CAR, "AdvancedDataIndex", null);
                 WireIntField(set.IndexItem, AdvancedDataIndexField, BuildLiveIntStore(set.IndexItem, CATEGORY_CAR, AdvancedDataIndexField, h =>
                 {
                     int count = RawMemory.GetAdvancedDataCount(h);
@@ -363,7 +358,6 @@ namespace RHE
                     return true;
                 }, targetSlot, keySuffix == null ? null : AdvancedDataRowTitle(slotIndex, "Index") + keySuffix));
                 set.ValueItem = new NativeDynamicItem<DisplayFloat>(AdvancedDataRowTitle(slotIndex, "Value"), ResolveDescriptor(CATEGORY_CAR, "AdvancedDataValue"));
-                TrackDescription(set.ValueItem, CATEGORY_CAR, "AdvancedDataValue", null);
                 WireFloatField(set.ValueItem, AdvancedDataValueField, BuildLiveFloatStore(set.ValueItem, CATEGORY_CAR, AdvancedDataValueField, h =>
                 {
                     int count = RawMemory.GetAdvancedDataCount(h);
@@ -404,7 +398,6 @@ namespace RHE
             NativeDynamicItem<DisplayFloat> weaponDamageItem = new NativeDynamicItem<DisplayFloat>("WeaponDamageScaledToVehHealthMult", ResolveDescriptor(CATEGORY_WEAPON, "WeaponDamageScaledToVehHealthMult"));
             targetSlot.Weapon.WeaponDamageScaledToVehHealthMultItem = weaponDamageItem;
             AddTreeRow(menu, weaponDamageItem);
-            TrackDescription(weaponDamageItem, CATEGORY_WEAPON);
             WireFloatField(weaponDamageItem, WeaponDamageScaledField, BuildLiveFloatStore(weaponDamageItem, CATEGORY_WEAPON, WeaponDamageScaledField, h => dataResolver(h) != null ? RawMemory.ReadRawFloat(h.MemoryAddress, HandlingDataLayout.WeaponDamageScaledToVehHealthMult) : 0.0f, (vehicle, h, v) =>
             {
                 if (dataResolver(h) == null) return false;
@@ -468,14 +461,11 @@ namespace RHE
                 slots[slotIndex].WeaponHashItem = new NativeDynamicItem<string>("WeaponHash", WeaponHashDescription(0), WeaponHashTable[0].DisplayName);
                 stringCyclerItems.Add(slots[slotIndex].WeaponHashItem);
                 AddTreeRow(slotMenu, slots[slotIndex].WeaponHashItem);
-                // Not tracked via TrackDescription, since SyncFieldValues composes this item's Description with a live "(0x...) " hash prefix
-                // The plain tracked-item overwrite would otherwise discard it on a live descriptor reload
                 WireWeaponHashCycler(slots[slotIndex].WeaponHashItem, CATEGORY_WEAPON, slotIndex, keySuffix, owner);
                 yield return true;
                 slots[slotIndex].WeaponSeatItem = new NativeDynamicItem<string>("WeaponSeat", ResolveDescriptor(CATEGORY_WEAPON, "WeaponSeat"), VehicleSeatNames[0]);
                 stringCyclerItems.Add(slots[slotIndex].WeaponSeatItem);
                 AddTreeRow(slotMenu, slots[slotIndex].WeaponSeatItem);
-                TrackDescription(slots[slotIndex].WeaponSeatItem, CATEGORY_WEAPON);
                 WireWeaponSeatCycler(slots[slotIndex].WeaponSeatItem, CATEGORY_WEAPON, slotIndex, keySuffix, owner);
                 yield return true;
                 if (weaponModTypeSupported)
@@ -483,7 +473,6 @@ namespace RHE
                     slots[slotIndex].WeaponModTypeItem = new NativeDynamicItem<string>("WeaponVehicleModType", ResolveDescriptor(CATEGORY_WEAPON, "WeaponVehicleModType"), VehicleModTypeNames[0]);
                     stringCyclerItems.Add(slots[slotIndex].WeaponModTypeItem);
                     AddTreeRow(slotMenu, slots[slotIndex].WeaponModTypeItem);
-                    TrackDescription(slots[slotIndex].WeaponModTypeItem, CATEGORY_WEAPON);
                     WireWeaponModTypeCycler(slots[slotIndex].WeaponModTypeItem, CATEGORY_WEAPON, slotIndex, keySuffix, owner);
                     yield return true;
                 }
@@ -493,7 +482,6 @@ namespace RHE
                     TurretFieldEntry field = TurretFields[t];
                     var turretItem = new NativeDynamicItem<DisplayFloat>(field.Title, ResolveDescriptor(CATEGORY_WEAPON, field.Title));
                     AddTreeRow(slotMenu, turretItem);
-                    TrackDescription(turretItem, CATEGORY_WEAPON);
                     if (field.RawOffset)
                     {
                         int offset = field.Offset;
@@ -539,7 +527,6 @@ namespace RHE
                     AddTreeRow(slotMenu, limitItem);
                     slots[slotIndex].PitchLimitItems[p] = limitItem;
                     slots[slotIndex].CurrentPitchLimitSlotItems[p] = limitItem;
-                    TrackDescription(limitItem, CATEGORY_WEAPON);
                     WireFloatField(limitItem, field, BuildLiveFloatStore(limitItem, CATEGORY_WEAPON, field, h => h.VehicleWeaponHandlingData != null ? RawMemory.ReadRawFloat(h.VehicleWeaponHandlingData.MemoryAddress, RawMemory.TurretPitchLimitOffset(slotIndex, fieldIndex)) : 0.0f, (vehicle, h, v) =>
                     {
                         if (h.VehicleWeaponHandlingData == null) return false;
@@ -795,11 +782,7 @@ namespace RHE
                 foreach (bool step in definition.BuildLiveRows(this, row.LiveMenu, keySuffix, context)) yield return step;
                 if (definition.FlagsMenu != null)
                 {
-                    if (definition.FlagsMenu.MenuDescriptionKey != null)
-                    {
-                        row.LiveFlagsMenu.Description = ResolveDescriptor(definition.Name, definition.FlagsMenu.MenuDescriptionKey);
-                        TrackMenuDescription(row.LiveFlagsMenu, definition.Name, definition.FlagsMenu.MenuDescriptionKey);
-                    }
+                    if (definition.FlagsMenu.MenuDescriptionKey != null) row.LiveFlagsMenu.Description = ResolveDescriptor(definition.Name, definition.FlagsMenu.MenuDescriptionKey);
                     AddStyledSubmenu(row.LiveMenu, row.LiveFlagsMenu);
                     yield return true;
                 }

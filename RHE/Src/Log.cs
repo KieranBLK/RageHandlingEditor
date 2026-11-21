@@ -203,22 +203,23 @@ namespace RHE
             public static string UnhandledExceptionObject(object obj) { return "EXCEPTION: Non-exception object | Value=" + obj; }
             public static string MultipleMenusVisible(string names) { return "MENU: Multiple visible | Menus=" + names; }
             // --INI--
-            public static string IniWritten() { return "INI: File | Written"; }
+            public static string IniWritten() { return "INI: File | Generated"; }
             public static string IniSnapshotFailed(string message) { return "INI: Write time and content snapshot | Failed | Error=" + message; }
-            public static string IniWriteFailed(string message) { return "INI: Could not save the settings file | Error=" + message; }
-            public static string IniReadFailed(string message) { return "INI: Could not read the settings file | Error=" + message; }
+            public static string IniWriteFailed(string message) { return "INI: Could not save config file | Error=" + message; }
+            public static string IniReadFailed(string message) { return "INI: Could not read config file | Error=" + message; }
             public static string IniReloaded(int mode) { return "INI: File | Reloaded | LoggingMode=" + mode; }
-            public static string IniStructureRestored() { return "INI: File | Rewritten to canonical structure | No setting changed | Reload not announced"; }
-            public static string RefreshIniFailed(string message) { return "INI: Could not reload the settings file | Error=" + message; }
-            public static string IniRestored() { return "INI: File | Missing | Rewritten from current settings"; }
-            public static string IniRegenerated(int count) { return "INI: File | Regenerated | UserChanges=" + count; }
-            public static string ValidateConfigFileFailed(string message) { return "INI: Could not repair the settings file; left unchanged | Error=" + message; }
+            public static string IniStructureRestored() { return "INI: File | Regenerated to canonical structure | No setting changed | Reload not announced"; }
+            public static string RefreshIniFailed(string message) { return "INI: Could not reload config file | Error=" + message; }
+            public static string IniRestored() { return "INI: File | Missing | Regenerated from current settings"; }
+            public static string IniRegenerated(int count) { return "INI: File | Validated | UserChanges=" + count; }
+            public static string ValidateConfigFileFailed(string message) { return "INI: Could not repair config file; untouched | Error=" + message; }
             public static string IniReset() { return "INI: ResetAllSettings | Reset to defaults"; }
-            public static string ResetScalarDefaultsFailed(string message) { return "INI: Could not reset the settings | Error=" + message; }
+            public static string ResetScalarDefaultsFailed(string message) { return "INI: Could not reset settings | Error=" + message; }
             public static string ResetToDefault(string row, string value) { return "SETTINGS: " + row + " | Reset to default | Value=\"" + value + "\""; }
             // --File Watching--
-            public static string FileWatcherStarted(string folder, string filter) { return "FILE WATCH: " + folder + " | Watching | Filter=" + filter; }
-            public static string FileWatcherFailed(string folder, string filter, string message) { return "FILE WATCH: " + folder + " | Could not start, polling instead | Filter=" + filter + " | Error=" + message; }
+            public static string FileWatcherStarted(string folder, string filter) { return "FILE-WATCH: " + folder + " | Watching | Filter=" + filter; }
+            public static string FileWatcherFailed(string folder, string filter, string message) { return "FILE-WATCH: " + folder + " | Could not start, polling instead | Filter=" + filter + " | Error=" + message; }
+            public static string ScriptFolderCreateFailed(string folder, string message) { return "FILE-WATCH: " + folder + " | Could not create the script folder | Error=" + message; }
             // --INI Parse--
             public static string IniInvalidValue(string key, string value) { return "INI: " + key + " | Invalid value | Value=\"" + value + "\""; }
             public static string IniInvalidValueRange(string key, string value, string expected) { return "INI: " + key + " | Invalid value | Value=\"" + value + "\" | Expected=" + expected; }
@@ -239,6 +240,7 @@ namespace RHE
             public static string RespawnModelNotLoaded() { return "RESPAWN: Model | Failed to load"; }
             public static string RespawnCreateFailed(string modelName) { return "RESPAWN: " + modelName + " | Could not create the new vehicle"; }
             public static string RespawnDone(string displayName, int modelHash) { return "RESPAWN: " + FormatModelLabel(displayName, modelHash) + " | Done"; }
+            public static string RespawnTrainRefused(string displayName, int modelHash) { return "RESPAWN: " + FormatModelLabel(displayName, modelHash) + " | Refused | Train"; }
             public static string RespawnSyncFailed(string message) { return "RESPAWN: SyncFieldValues | Failed | Error=" + message; }
             public static string RespawnFailed(string message) { return "RESPAWN: Respawn failed | Error=" + message; }
             public static string RespawnStageFailed(string stage, string message) { return "RESPAWN: " + stage + " | Stage failed | Error=" + message; }
@@ -247,6 +249,8 @@ namespace RHE
             public static string AutoRespawnCanceled(string modelName, int modelHash, string trigger) { return "RESPAWN: " + FormatModelLabel(modelName, modelHash) + " | Auto | Canceled | Trigger=" + trigger + " | Every changed field is back to its original value"; }
             public static string RespawnVehicleWeaponRestored(string modelName, int modelHash, string weapon, bool restored) { return "RESPAWN: " + FormatModelLabel(modelName, modelHash) + " | Vehicle weapon | " + weapon + " | Restored=" + (restored ? "True" : "False"); }
             public static string RespawnFlightStateRestored(string modelName, int modelHash, float hover, float rotor, string gear, float nozzle, int gliderState, string wingDeployedRatio) { return "RESPAWN: " + FormatModelLabel(modelName, modelHash) + " | Flight state | Hover=" + hover.ToString("F2") + " | Rotor=" + rotor.ToString("F2") + " | Gear=" + gear + " | Nozzle=" + nozzle.ToString("F2") + " | Glider=" + (gliderState < 0 ? "None" : gliderState.ToString()) + " | WingDeployedRatio=" + wingDeployedRatio; }
+            public static string RespawnTransformRestored(string modelName, int modelHash, string mode) { return "RESPAWN: " + FormatModelLabel(modelName, modelHash) + " | Transform | Mode=" + mode; }
+            public static string RespawnMotionReapplied(string modelName, int modelHash, float speedBefore, float speedAfter) { return "RESPAWN: " + FormatModelLabel(modelName, modelHash) + " | Motion reapplied after the first update | SpeedBefore=" + speedBefore.ToString("F2", CultureInfo.InvariantCulture) + " | SpeedAfter=" + speedAfter.ToString("F2", CultureInfo.InvariantCulture); }
             // --Visualization--
             public static string WheelBoundNotFound(string modelName, int modelHash, string wheel) { return "VISUALIZATION: " + FormatModelLabel(modelName, modelHash) + " | Wheel bound | Not found | Wheel=" + wheel; }
             public static string WaterSamplesNotFound(string modelName, int modelHash, string step) { return "VISUALIZATION: " + FormatModelLabel(modelName, modelHash) + " | Water samples | Not found | Step=" + step + " | Water Samples and Pontoon Samples skipped"; }
@@ -255,6 +259,7 @@ namespace RHE
             public static string UnloadSuppressed(string displayName, int modelHash, int deleted) { return "UNLOAD: " + FormatModelLabel(displayName, modelHash) + " | Suppressed | Deleted=" + deleted; }
             public static string UnloadAborted(string displayName, int modelHash) { return "UNLOAD: " + FormatModelLabel(displayName, modelHash) + " | Aborted | Instance spawned"; }
             public static string UnloadDone(string displayName, int modelHash, int elapsedMs) { return "UNLOAD: " + FormatModelLabel(displayName, modelHash) + " | Unloaded | Elapsed=" + elapsedMs + "ms"; }
+            public static string UnloadTrainRefused(string displayName, int modelHash) { return "UNLOAD: " + FormatModelLabel(displayName, modelHash) + " | Refused | Train"; }
             public static string UnloadCarGenerators(bool disabled) { return "UNLOAD: Car generators | " + (disabled ? "Disabled map-wide" : "Enabled"); }
             public static string UnloadVehicleBudget(int level) { return "UNLOAD: Vehicle population budget | Level=" + level; }
             public static string UnloadUnsuppressedOnReload(string displayName, int modelHash) { return "UNLOAD: " + FormatModelLabel(displayName, modelHash) + " | Unsuppressed | Script reload"; }
@@ -288,6 +293,7 @@ namespace RHE
             // --Warm Up--
             public static string PrecompileDone(int prepared, int skipped, int failed, double milliseconds, int ticks) { return "WARMUP: Precompile | Done | Prepared=" + prepared + " | Skipped=" + skipped + " | Failed=" + failed + " | Time=" + milliseconds.ToString("F0") + "ms | Ticks=" + ticks; }
             public static string PrecompileMethodFailed(string method, string exceptionType, string message) { return "WARMUP: Precompile | Method failed | Method=" + method + " | " + exceptionType + ": " + message + " | Later failures are only counted"; }
+            // --Perf--
             // --Teleport--
             public static string TeleportedToVehicle(string displayName, int modelHash, bool driverRemoved) { return "TELEPORT: " + FormatModelLabel(displayName, modelHash) + " | Done" + (driverRemoved ? " | Driver set out of the vehicle" : ""); }
             public static string DeletedVehicle(string displayName, int modelHash, int occupantsDeleted, bool onScreen) { return "DELETE: " + FormatModelLabel(displayName, modelHash) + " | Occupants=" + occupantsDeleted + " | " + (onScreen ? "OnScreen" : "OffScreen"); }
@@ -318,8 +324,8 @@ namespace RHE
             public static string ModelFlagOffsetResolved(int offset, int apiOffset) { return "MODELFLAGS: Flag base offset | Resolved | Offset=0x" + offset.ToString("X") + " | ApiOffset=0x" + apiOffset.ToString("X"); }
             public static string ModelFlagOffsetUnresolved(string reason) { return "MODELFLAGS: Flag base offset | Unresolved | Turret pitch limits stay shown and saved, glider restore skipped | Reason=" + reason; }
             public static string GearRatioPatchResolved(string state, int gearCap) { return "GEARRATIOPATCH: Plugin | " + state + " | InitialDriveGearsCap=" + gearCap; }
-            public static string ColliderStateChanged(int vehicle, string state, GTA.Math.Vector3 centerOfGravity, GTA.Math.Vector3 centerOfMass) { return "COLLIDER: State | " + state + " | Vehicle=" + vehicle + " | CenterOfGravityOffset=" + FormatOffset(centerOfGravity) + " | CenterOfMassOffset=" + FormatOffset(centerOfMass); }
-            public static string CenterOfGravityReasserted(int vehicle, GTA.Math.Vector3 was, GTA.Math.Vector3 now) { return "COLLIDER: CenterOfGravityOffset | Reasserted while rigid | Vehicle=" + vehicle + " | Was=" + FormatOffset(was) + " | Now=" + FormatOffset(now); }
+            public static string ColliderStateChanged(string modelName, int modelHash, string state, GTA.Math.Vector3 centerOfGravity, GTA.Math.Vector3 centerOfMass) { return "COLLIDER: " + FormatModelLabel(modelName, modelHash) + " | State | " + state + " | CenterOfGravityOffset=" + FormatOffset(centerOfGravity) + " | CenterOfMassOffset=" + FormatOffset(centerOfMass); }
+            public static string CenterOfGravityReasserted(string modelName, int modelHash, GTA.Math.Vector3 was, GTA.Math.Vector3 now) { return "COLLIDER: " + FormatModelLabel(modelName, modelHash) + " | CenterOfGravityOffset | Reasserted while rigid | Was=" + FormatOffset(was) + " | Now=" + FormatOffset(now); }
             private static string FormatOffset(GTA.Math.Vector3 offset) { return offset.X.ToString("F3", CultureInfo.InvariantCulture) + ", " + offset.Y.ToString("F3", CultureInfo.InvariantCulture) + ", " + offset.Z.ToString("F3", CultureInfo.InvariantCulture); }
             public static string FieldEntryMalformed(string category, string tag, int completeGroups, int halfSetGroups) { return "FIELDENTRY: " + category + "." + tag + " | Needs exactly 1 getter and setter pair and no other accessor | CompleteGroups=" + completeGroups + " | HalfSetGroups=" + halfSetGroups; }
             public static string FlagEntryMalformed(string table, string name, int bitIndex, string problem) { return "FLAGENTRY: " + table + "." + name + " | " + problem + " | BitIndex=" + bitIndex; }
@@ -332,13 +338,13 @@ namespace RHE
             public static string HandlingDeleted(string name) { return "HANDLING: " + name + " | Deleted"; }
             public static string HandlingDeleteError(string name, string message) { return "HANDLING: " + name + " | Could not delete | Error=" + message; }
             public static string HandlingPostRefreshFailed(string name, string message) { return "HANDLING: " + name + " | File operation succeeded | Menu refresh failed | Error=" + message; }
-            public static string ModelNameResolved(string name, int modelHash, string source) { return "MODEL NAME: " + FormatModelLabel(name, modelHash) + " | Resolved | Source=" + source; }
-            public static string HandlingNameResolved(string name, int modelHash, string source) { return "HANDLING NAME: " + FormatModelLabel(name, modelHash) + " | Resolved | Source=" + source; }
+            public static string ModelNameResolved(string name, int modelHash, string source) { return "MODELNAME: " + FormatModelLabel(name, modelHash) + " | Resolved | Source=" + source; }
+            public static string HandlingNameResolved(string name, int modelHash, string source) { return "HANDLINGNAME: " + FormatModelLabel(name, modelHash) + " | Resolved | Source=" + source; }
             public static string ModelMetaDataLoaded(int count, int handlingIds, int skipped) { return "META: ModelMetaData file | Loaded | Entries=" + count + " | HandlingIds=" + handlingIds + " | Skipped=" + skipped; }
             public static string ModelMetaDataNotFound(string path) { return "META: ModelMetaData file | Not found | Path=" + path + " | Using the base-game model list and display names"; }
             public static string ModelMetaDataReadFailed(string message) { return "META: ModelMetaData file | Read failed | Error=" + message; }
             public static string HandlingNameHashUnverified(string handling, long address, int rawHash) { return "HANDLING KEY: " + handling + " (struct 0x" + address.ToString("X") + ") | Name hash not verified | " + (rawHash == 0 ? "The read returned 0" : "The game's lookup of 0x" + rawHash.ToString("X8") + " did not return this handling") + " | Left out of the reload state"; }
-            public static string ReloadStateHandlingUnresolved(string section, string hashText) { return "PERSIST: " + section + " | Handling name hash " + hashText + " | Names no handling | Every line of that hash skipped"; }
+            public static string ReloadStateHandlingUnresolved(string section, string hashText) { return "PERSISTENCE: " + section + " | Handling name hash " + hashText + " | Names no handling | Every line of that hash skipped"; }
             // --Autosave--
             public static string AutosaveWritten(string name) { return "AUTOSAVE: " + name + " | Written"; }
             public static string AutosaveFailed(string name, string message) { return "AUTOSAVE: " + name + " | Could not write the autosave | Error=" + message; }
@@ -349,28 +355,6 @@ namespace RHE
             // --Descriptors--
             public static string DescriptorMissing(string fieldName) { return "DESCRIPTORS: " + fieldName + " | No entry | Using empty description"; }
             public static string DescriptorUnpairedTilde(string key) { return "DESCRIPTORS: " + key + " | Unpaired ~ | Text after it does not display"; }
-            public static string DescriptorsWritten() { return "DESCRIPTORS: Default file written"; }
-            public static string DescriptorsWriteVerifyFailed() { return "DESCRIPTORS: File did not save correctly and was removed; default descriptions used"; }
-            public static string DescriptorsLoadFailed(string message) { return "DESCRIPTORS: Could not load file | Error=" + message; }
-            public static string DescriptorsReloaded() { return "DESCRIPTORS: Reloaded"; }
-            public static string DescriptorsRefreshFailed(string message) { return "DESCRIPTORS: Could not reload | Error=" + message; }
-            public static string DescriptorsRegenerated(int customizedCount) { return "DESCRIPTORS: Regenerated | Customized=" + customizedCount; }
-            public static string DescriptorsUnchanged() { return "DESCRIPTORS: Already canonical | Write skipped"; }
-            public static string DescriptorsVersionUpgraded(int newVersion) { return "DESCRIPTORS: Internal defaults changed | Old file backed up | Regenerated | Version=" + newVersion; }
-            // FirstLine-capped, since an exception here can otherwise append the entire offending file to the log
-            public static string ValidateDescriptorsFileFailed(string message) { return "DESCRIPTORS: Could not update file | Error=" + FirstLine(message, EXCEPTION_MESSAGE_MAX_LENGTH); }
-            // FirstLine-capped, since the parser appends the offending input, which would dump the whole file into the log
-            public static string DescriptorsMalformed(string message) { return "DESCRIPTORS: Not valid JSON | Salvaging readable entries | Error=" + FirstLine(message, EXCEPTION_MESSAGE_MAX_LENGTH); }
-            public static string DescriptorsBackupFailed(string message) { return "DESCRIPTORS: Damaged file backup failed | Error=" + message; }
-            public static string DescriptorsRepairSkipped() { return "DESCRIPTORS: Repair skipped | The damaged file's backup could not be written, so the file is left as it is | Its salvaged entries are used for this session"; }
-            public static string DescriptorsBackupCleanupFailed(string message) { return "DESCRIPTORS: Repair backup removal failed | Error=" + message; }
-            // Capped to the first line, since the parser appends the offending input, which would dump the whole file into the log
-            public static string DescriptorsTopLevelUnreadable(string message) { return "DESCRIPTORS: Top level entries unreadable | Version read as 0 | Error=" + FirstLine(message, EXCEPTION_MESSAGE_MAX_LENGTH); }
-            public static string DescriptorsVersionUnreadable(string message) { return "DESCRIPTORS: Version entry is not a number | Version read as 0 | Error=" + message; }
-            public static string DescriptorsUnreadableFileRemovalFailed(string message) { return "DESCRIPTORS: Removing the file that failed to save correctly also failed | Error=" + message; }
-            public static string DescriptorsRestored() { return "DESCRIPTORS: Missing | Rewritten with defaults"; }
-            public static string DescriptorsDisableUpdatesChanged(string oldValue, bool newValue) { return "DESCRIPTORS: DisableUpdates | " + oldValue + " -> " + newValue; }
-            public static string DescriptorsDisableUpdatesInvalid(string value, bool kept) { return "DESCRIPTORS: DisableUpdates | Not true or false | Value=\"" + value + "\" | Kept=" + kept; }
             // --Undo/Redo--
             public static string UndoApplied(string fieldKey) { return "UNDO: " + fieldKey + " | Applied"; }
             public static string RedoApplied(string fieldKey) { return "REDO: " + fieldKey + " | Applied"; }
@@ -397,16 +381,16 @@ namespace RHE
             public static string UndoEntrySkipped(string description, string category) { return "UNDO: " + description + " | Skipped | Export-only " + category + " category now exists live"; }
             public static string AppliedHandlingUndone() { return "UNDO: Last applied handling | Reverted"; }
             public static string AppliedHandlingRedone() { return "REDO: Last undone handling | Reapplied"; }
-            public static string ReloadStateWritten(string sections) { return "PERSIST: ReloadState | Written | " + sections; }
-            public static string ReloadStateWriteFailed(string section, string message) { return "PERSIST: " + section + " | Write failed | Error=" + message; }
-            public static string ReloadStateReadFailed(string message) { return "PERSIST: ReloadState | Read failed | Error=" + message; }
-            public static string ReloadStateDeleteFailed(string message) { return "PERSIST: ReloadState | File delete failed after a read | Error=" + message; }
-            public static string ReloadStateHeaderUnreadable(string cause) { return "PERSIST: ReloadState | Header unreadable | Cause=" + cause + " | Treated as another game launch"; }
-            public static string ReloadStateOtherLaunch() { return "PERSIST: ReloadState | Discarded | Written by another game launch"; }
-            public static string ReloadStateSectionLoaded(string section, int count) { return "PERSIST: " + section + " | Loaded | Entries=" + count; }
-            public static string ReloadStateSectionFailed(string section, string message) { return "PERSIST: " + section + " | Load failed | Error=" + message; }
-            public static string UndoHistoryLineUnrecognized(int rawLength) { return "PERSIST: UndoHistory | Unrecognized line | Length=" + rawLength + " | Entry skipped"; }
-            public static string UndoHistoryKindUnknown(string kind) { return "PERSIST: UndoHistory | Unknown structural kind | Kind=" + kind + " | Entry skipped"; }
+            public static string ReloadStateWritten(string sections) { return "PERSISTENCE: ReloadState | Written | " + sections; }
+            public static string ReloadStateWriteFailed(string section, string message) { return "PERSISTENCE: " + section + " | Write failed | Error=" + message; }
+            public static string ReloadStateReadFailed(string message) { return "PERSISTENCE: ReloadState | Read failed | Error=" + message; }
+            public static string ReloadStateDeleteFailed(string message) { return "PERSISTENCE: ReloadState | File delete failed after a read | Error=" + message; }
+            public static string ReloadStateHeaderUnreadable(string cause) { return "PERSISTENCE: ReloadState | Header unreadable | Cause=" + cause + " | Treated as another game launch"; }
+            public static string ReloadStateOtherLaunch() { return "PERSISTENCE: ReloadState | Discarded | Written by another game launch"; }
+            public static string ReloadStateSectionLoaded(string section, int count) { return "PERSISTENCE: " + section + " | Loaded | Entries=" + count; }
+            public static string ReloadStateSectionFailed(string section, string message) { return "PERSISTENCE: " + section + " | Load failed | Error=" + message; }
+            public static string UndoHistoryLineUnrecognized(int rawLength) { return "PERSISTENCE: UndoHistory | Unrecognized line | Length=" + rawLength + " | Entry skipped"; }
+            public static string UndoHistoryKindUnknown(string kind) { return "PERSISTENCE: UndoHistory | Unknown structural kind | Kind=" + kind + " | Entry skipped"; }
             public static string StructuralEditDecodeFailed(string message) { return "ELEMENT: Decode failed | Entry skipped | Error=" + message; }
             public static string PhantomFlagsUnparseable(string rawValue) { return "PHANTOM: strAdvancedFlags | Not valid hex | Value=\"" + rawValue + "\" | Treated as 0 | Other bits may be lost"; }
             public static string PreviewDiffSnapshotCaptured(string handling) { return "DIFF: " + handling + " | Baseline captured"; }
@@ -414,10 +398,10 @@ namespace RHE
             public static string VehicleSearchDone(string text, int totalMatches, int shown) { return "SEARCH: " + text + " | Matches=" + totalMatches + " | Shown=" + shown; }
             public static string SearchResultUnreadable(string modelName) { return "SEARCH: " + modelName + " | Handling not readable | Not applied"; }
             public static string VehicleSearchAll(int modelCount) { return "SEARCH: All models | Listed=" + modelCount; }
-            public static string MenuRestoreSkipped(int savedCount, int currentCount) { return "PERSIST: MenuRestore | Skipped | Saved menu count=" + savedCount + " | Current menu count=" + currentCount; }
+            public static string MenuRestoreSkipped(int savedCount, int currentCount) { return "PERSISTENCE: MenuRestore | Skipped | Saved menu count=" + savedCount + " | Current menu count=" + currentCount; }
             public static string PreviewPositionRestored(string menuName, int row) { return "PREVIEW: Position restored | " + menuName + " | Row=" + row; }
             public static string PreviewPositionSkipped(string reason) { return "PREVIEW: Position not restored | " + reason; }
-            public static string MenuRestoreApplied(string menuName, int row) { return "PERSIST: MenuRestore | Restored | " + menuName + " | Row=" + row; }
+            public static string MenuRestoreApplied(string menuName, int row) { return "PERSISTENCE: MenuRestore | Restored | " + menuName + " | Row=" + row; }
             public static string SelectiveCopyApplied(string fieldKey) { return "SELECTIVECOPY: " + fieldKey + " | Applied"; }
             public static string SelectiveCopyIdentical(string fieldKey) { return "SELECTIVECOPY: " + fieldKey + " | Identical to the current value | Not applied"; }
             public static string SelectiveCopyCategory(string category, int applied, int identical, int skipped) { return "SELECTIVECOPY: Category=" + category + " | Applied=" + applied + " | Identical=" + identical + " | Skipped=" + skipped; }
@@ -427,14 +411,6 @@ namespace RHE
             public static string SelectiveCopyEntryAbsent(string fieldKey, string category) { return "SELECTIVECOPY: " + fieldKey + " | Category=" + category + " | Entry absent in the category | Not applied"; }
             public static string SelectiveCopyRocketBoostAbsent(string fieldKey) { return "SELECTIVECOPY: " + fieldKey + " | Vehicle has no rocket boost | Not applied"; }
             public static string SelectiveCopyRearMountedTurretAbsent(string fieldKey) { return "SELECTIVECOPY: " + fieldKey + " | Vehicle has no rear mounted turret | Not applied"; }
-
-            private static string FirstLine(string message, int maxLength)
-            {
-                if (string.IsNullOrEmpty(message)) return "";
-                int breakAt = message.IndexOfAny(new[] { '\r', '\n' });
-                string line = breakAt >= 0 ? message.Substring(0, breakAt) : message;
-                return line.Length > maxLength ? line.Substring(0, maxLength) : line;
-            }
         }
     }
 }

@@ -14,7 +14,7 @@ namespace RHE
 {
     public partial class RageHandlingEditor : Script
     {
-        internal const string ScriptVersion = "0.6.5";
+        internal const string ScriptVersion = "1.1.1";
 
         private ObjectPool pool;
         // Set when BuildMenu or the rest of the startup load throws, leaving a half-built instance
@@ -72,8 +72,9 @@ namespace RHE
                 logger.Log(Dbg.Level.Info, Dbg.Config(loggingMode));
                 lastSettingsSnapshot = BuildSettingsSnapshot();
                 LogSettingsSnapshot(lastSettingsSnapshot);
-                LoadDescriptors();
-                // Started after the descriptors load, which creates the script's folder on a first run, so its watcher has a folder to watch
+                // A first run has no script folder yet, and the watcher needs one to watch the Exports tree from
+                try { if (!Directory.Exists(SCRIPT_FOLDER_PATH)) Directory.CreateDirectory(SCRIPT_FOLDER_PATH); }
+                catch (Exception ex) { logger.Log(Dbg.Level.Warn, Dbg.ScriptFolderCreateFailed(SCRIPT_FOLDER_PATH, ex.Message)); }
                 fileWatcher = new OwnedFileWatcher(logger, iniPath);
                 try { BuildMenu(); }
                 catch (Exception ex)

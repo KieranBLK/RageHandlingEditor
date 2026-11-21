@@ -33,6 +33,14 @@ namespace RHE
         // The vehicle whose selected weapon a live slot edit replaced, and the hash that replaced it
         private int followedWeaponVehicleHandle;
         private VehicleWeaponHash followedVehicleWeapon;
+        // A respawned vehicle's motion, written again on the next tick, since a mod that moves a fresh vehicle's bones in its first update can drop its speed
+        // The second write also smooths the hand-off on a vehicle that keeps its speed
+        // Null while nothing waits
+        private Vehicle pendingMotionVehicle;
+        private int pendingMotionFrame;
+        private float pendingMotionSpeed;
+        private GTA.Math.Vector3 pendingMotionVelocity;
+        private GTA.Math.Vector3 pendingMotionAngularVelocity;
 
         // Respawns the Active editor's vehicle. The Respawn Vehicle row and hotkey fire from mainMenu, where no tree is visible to pick a vehicle
         private void RespawnVehicle()
@@ -94,6 +102,9 @@ namespace RHE
             public float NozzlePosition;
             public float EngineWarmUpTime;
             public bool PlaneEngineRunningInAir;
+            // A fresh vehicle starts in car mode with its wheels out, so a submarine car's dive mode and a jet ski's tucked wheels would both be lost
+            public bool WasInSubmarineMode;
+            public bool HadWheelsRetracted;
             public bool PlayerWasInVehicle;
             public VehicleSeat PlayerSeat;
             public VehicleWeaponHash PlayerVehicleWeapon;
@@ -105,6 +116,13 @@ namespace RHE
             if (Entity.IsNullOrNotExisting(player) || Entity.IsNullOrNotExisting(oldVehicle))
             {
                 notifications.PostNotificationOnce(NOTIFICATION_KEY_NO_VEHICLE_RESPAWN, NOTIF_NO_VEHICLE_RESPAWN);
+                return;
+            }
+            // Deleting any carriage of a running train crashes the game, so the row, the hotkey, and an automatic respawn all stop here
+            if (oldVehicle.IsTrain)
+            {
+                logger.Log(Dbg.Level.Info, Dbg.RespawnTrainRefused(modelNames.ResolveModelName(oldVehicle), oldVehicle.Model.Hash));
+                notifications.Notify(NOTIFICATION_KEY_TRAIN_REFUSED, NOTIF_TRAIN_REFUSED);
                 return;
             }
             RespawnSnapshot snapshot = CaptureRespawnSnapshot(oldVehicle, player);
@@ -220,6 +238,10 @@ namespace RHE
             // A new plane restarts this at 0, and its thrust scales with it, so a respawn in the air would lose lift for up to 5 seconds
             snapshot.EngineWarmUpTime = snapshot.IsPlane ? RawMemory.ReadRawFloat(oldVehicle.MemoryAddress, VehicleLayout.EngineWarmUpTimer) : 0.0f;
             snapshot.PlaneEngineRunningInAir = snapshot.IsPlane && oldVehicle.IsInAir && oldVehicle.IsEngineRunning;
+            // Each native is asked only of the one vehicle type it accepts, since the game rejects the call for any other
+            // The retract getter reads True while the wheels move either way, so a respawn mid-transition lands on the side the game reports
+            snapshot.WasInSubmarineMode = oldVehicle.IsSubmarineCar && Function.Call<bool>(Hash.IS_VEHICLE_IN_SUBMARINE_MODE, oldVehicle.Handle);
+            snapshot.HadWheelsRetracted = oldVehicle.IsAmphibiousQuadBike && Function.Call<bool>(Hash.GET_IS_WHEELS_RETRACTED, oldVehicle.Handle);
             // Compares Handle, the vehicle's real identity, since both wrappers are fetched independently. The caller confirmed oldVehicle exists
             Vehicle currentPlayerVehicle = player.CurrentVehicle;
             snapshot.PlayerWasInVehicle = !Entity.IsNullOrNotExisting(currentPlayerVehicle) && currentPlayerVehicle.Handle == oldVehicle.Handle;
@@ -249,8 +271,8 @@ namespace RHE
             followedVehicleWeapon = newHash;
         }
 
-        // Everything after the delete runs in independently guarded stages, ordered by what the player loses most
-        // The seat, the motion, and the editor's target come first, then the looks, then the engine and flight state
+        // Everything after the delete runs in independently guarded stages
+        // The seat and the editor's target come first, then the looks, then the engine and flight state, and the motion last
         // A throw in one stage costs only what that stage restores and never skips a later stage
         // A null respawnedContext skips the re-scope
         private void RestoreRespawnSnapshot(RespawnSnapshot snapshot, Vehicle newVehicle, Ped player, EditorContext respawnedContext)
@@ -259,17 +281,9 @@ namespace RHE
             {
                 // Full 3D orientation, not just yaw. Restored before the seat, same tier as position/heading
                 newVehicle.Quaternion = snapshot.Quaternion;
-                if (snapshot.PlayerWasInVehicle)
-                {
-                    player.SetIntoVehicle(newVehicle, snapshot.PlayerSeat);
-                    newVehicle.CurrentGear = newVehicle.HighGear;
-                    newVehicle.Throttle = snapshot.Throttle;
-                    newVehicle.ForwardSpeed = snapshot.Speed;
-                    newVehicle.Velocity = snapshot.Velocity;
-                    newVehicle.LocalRotationVelocity = snapshot.AngularVelocity;
-                }
+                if (snapshot.PlayerWasInVehicle) player.SetIntoVehicle(newVehicle, snapshot.PlayerSeat);
             }
-            catch (Exception seatEx) { logger.Log(Dbg.Level.Error, Dbg.RespawnStageFailed("Seat and velocity", seatEx.Message)); }
+            catch (Exception seatEx) { logger.Log(Dbg.Level.Error, Dbg.RespawnStageFailed("Seat", seatEx.Message)); }
 
             // Whichever tree tracked the old instance re-scopes onto the new one even if the seat stage failed, since a tree left on the deleted wrapper unmounts as dead
             // Seat tracking catches a seated respawn on its own next tick, so Current's branch only covers the frozen-while-editing case
@@ -367,6 +381,10 @@ namespace RHE
                     string gearText = snapshot.PlaneHasLandingGear ? snapshot.LandingGearState.ToString() : "None";
                     logger.Log(Dbg.Level.Info, Dbg.RespawnFlightStateRestored(modelNames.ResolveModelName(newVehicle), snapshot.Model.Hash, snapshot.SpecialFlightCurrentRatio, snapshot.HeliBladesSpeed, gearText, snapshot.NozzlePosition, snapshot.GliderState, snapshot.WingDeployedRatioCaptured ? snapshot.WingDeployedRatio.ToString("F3") : "None"));
                 }
+                // Both switch at once with no transform animation
+                if (snapshot.WasInSubmarineMode) Function.Call(Hash.TRANSFORM_TO_SUBMARINE, newVehicle.Handle, true);
+                if (snapshot.HadWheelsRetracted) Function.Call(Hash.SET_WHEELS_RETRACTED_INSTANTLY, newVehicle.Handle);
+                if (snapshot.WasInSubmarineMode || snapshot.HadWheelsRetracted) logger.Log(Dbg.Level.Info, Dbg.RespawnTransformRestored(modelNames.ResolveModelName(newVehicle), snapshot.Model.Hash, snapshot.WasInSubmarineMode ? "Submarine" : "WheelsRetracted"));
                 EntityBone newTurretBone = newVehicle.Bones["turret_1base"];
                 if (newTurretBone.Index != -1)
                 {
@@ -382,6 +400,38 @@ namespace RHE
                 }
             }
             catch (Exception stateEx) { logger.Log(Dbg.Level.Error, Dbg.RespawnStageFailed("Engine and flight state", stateEx.Message)); }
+            try
+            {
+                // Turning an extra on repairs the vehicle, and the game's repair zeroes any velocity above 80 m/s, so the motion is written after every other stage
+                if (snapshot.PlayerWasInVehicle)
+                {
+                    newVehicle.CurrentGear = newVehicle.HighGear;
+                    newVehicle.Throttle = snapshot.Throttle;
+                    newVehicle.ForwardSpeed = snapshot.Speed;
+                    newVehicle.Velocity = snapshot.Velocity;
+                    newVehicle.LocalRotationVelocity = snapshot.AngularVelocity;
+                    pendingMotionVehicle = newVehicle;
+                    pendingMotionFrame = Game.FrameCount;
+                    pendingMotionSpeed = snapshot.Speed;
+                    pendingMotionVelocity = snapshot.Velocity;
+                    pendingMotionAngularVelocity = snapshot.AngularVelocity;
+                }
+            }
+            catch (Exception motionEx) { logger.Log(Dbg.Level.Error, Dbg.RespawnStageFailed("Motion", motionEx.Message)); }
+        }
+
+        // Runs first on every tick a motion waits, and writes it once the game has updated the vehicle at least once
+        private void ReapplyRespawnMotion()
+        {
+            if (Game.FrameCount == pendingMotionFrame) return;
+            Vehicle vehicle = pendingMotionVehicle;
+            pendingMotionVehicle = null;
+            if (Entity.IsNullOrNotExisting(vehicle)) return;
+            float speedBefore = vehicle.Speed;
+            vehicle.ForwardSpeed = pendingMotionSpeed;
+            vehicle.Velocity = pendingMotionVelocity;
+            vehicle.LocalRotationVelocity = pendingMotionAngularVelocity;
+            if (logger.IsInfoEnabled()) logger.Log(Dbg.Level.Info, Dbg.RespawnMotionReapplied(modelNames.ResolveModelName(vehicle), vehicle.Model.Hash, speedBefore, vehicle.Speed));
         }
 
         // What the spawn refresh found: A kit already assigned, one it installed, or a model with no kit at all. The log names it with these words

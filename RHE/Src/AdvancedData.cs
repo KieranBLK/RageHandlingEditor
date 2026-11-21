@@ -800,7 +800,6 @@ namespace RHE
         private NativeDynamicItem<int> WireAdvancedDataInt(NativeMenu menu, EditorContext owner, XmlAdvancedDataStore store, string title, string descriptorKey, int slotIndex, string subElementName)
         {
             var item = new NativeDynamicItem<int>(title, ResolveDescriptor(CATEGORY_CAR, descriptorKey));
-            TrackDescription(item, CATEGORY_CAR, descriptorKey, null);
             var template = new AdvancedDataFieldEdit(store, slotIndex, subElementName, null, null);
             WireIntField(item, AdvancedDataIndexField, BuildElementIntStore(menu, item, owner, () => store.ResolveSlotOfTree(this, owner, slotIndex), subElementName, "value", template));
             return item;
@@ -815,7 +814,6 @@ namespace RHE
             stringCyclerItems.Add(item);
             // Not added to any menu here, like its Index and Value siblings
             // EnsureAdvancedDataEntryMenu adds all 3 to the entry's own submenu the first time SyncAdvancedDataVisibilityCore lists that entry
-            TrackDescription(item, CATEGORY_CAR, "AdvancedDataSlot", null);
             RegisterUndoFocusItem(AdvancedDataFieldEdit.BuildFocusKey(store.IntFieldKind, slotIndex, "Slot"), item);
             Func<int> getter = () =>
             {
@@ -861,7 +859,6 @@ namespace RHE
         private NativeDynamicItem<DisplayFloat> WireAdvancedDataValue(NativeMenu menu, EditorContext owner, XmlAdvancedDataStore store, string title, int slotIndex)
         {
             var item = new NativeDynamicItem<DisplayFloat>(title, ResolveDescriptor(CATEGORY_CAR, "AdvancedDataValue"));
-            TrackDescription(item, CATEGORY_CAR, "AdvancedDataValue", null);
             var template = new AdvancedDataFieldEdit(store, slotIndex, "Value", null, null);
             WireFloatField(item, AdvancedDataValueField, BuildElementFloatStore(menu, item, owner, () => store.ResolveSlotOfTree(this, owner, slotIndex), AdvancedDataValueField.Tag, "value", template));
             return item;
@@ -875,7 +872,6 @@ namespace RHE
         {
             AdvancedDataMenus lists = store.MenusOf(owner);
             lists.ListMenu.Description = ResolveDescriptor(CATEGORY_CAR, "AdvancedData");
-            TrackMenuDescription(lists.ListMenu, CATEGORY_CAR, "AdvancedData");
             var sets = new AdvancedDataItemSet[ADVANCEDDATA_COUNT_SANITY_CEILING];
             for (int i = 0; i < ADVANCEDDATA_COUNT_SANITY_CEILING; i++)
             {
@@ -983,7 +979,6 @@ namespace RHE
             string entryTitle = string.Format(TITLE_ENTRY, (index + 1));
             NativeMenu entryMenu = MakeMenu(TITLE_EDIT_HANDLING, entryTitle);
             entryMenu.Description = ResolveDescriptor(CATEGORY_CAR, "AdvancedData");
-            TrackMenuDescription(entryMenu, CATEGORY_CAR, "AdvancedData");
             entryMenu.Add(set.SlotItem);
             entryMenu.Add(set.IndexItem);
             entryMenu.Add(set.ValueItem);
@@ -991,7 +986,6 @@ namespace RHE
             set.SubmenuItem = new StyledSubmenuItem(entryMenu, listMenu);
             set.SubmenuItem.Title = entryTitle;
             set.SubmenuItem.Description = ResolveDescriptor(CATEGORY_CAR, "AdvancedData");
-            TrackDescription(set.SubmenuItem, CATEGORY_CAR, "AdvancedData", null);
             for (int i = 0; i < set.FocusKeys.Length; i++) RegisterUndoFocusItem(set.FocusKeys[i], set.SubmenuItem);
             RegisterRuntimeMenu(entryMenu, context);
             // An export-only entry's rows keep their sync actions registered under the list menu they were wired against

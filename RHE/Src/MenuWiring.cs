@@ -96,9 +96,9 @@ namespace RHE
             public float AssertedValue;
             public bool Asserting;
             public bool Synced;
-            // A field whose description leads with its current value: The text builder, and the tracked description entry that carries it through a descriptor reload
+            // A field whose description leads with its current value: The text builder, and the description it leads
             public Func<float, string> DescriptionPrefix;
-            public TrackedItemDescription TrackedDescription;
+            public string BaseDescription;
             // Scopes ReassertDriftedFields and the vehicle-changed Asserting reset to the tree this binding belongs to
             // An edit made in one tree can then never reassert onto another tree's identically-named field
             public EditorContext Owner;
@@ -327,13 +327,10 @@ namespace RHE
             mutedLeftRightSound = null;
         }
 
-        // The tracked entry carries the lead across a descriptor reload
         private void RefreshValueDescription(FloatFieldBinding binding, float value)
         {
-            if (binding.DescriptionPrefix == null || binding.TrackedDescription == null) return;
-            TrackedItemDescription tracked = binding.TrackedDescription;
-            tracked.Prefix = binding.DescriptionPrefix(value);
-            binding.Item.Description = tracked.Prefix + ResolveDescriptor(tracked.Category, tracked.FieldName);
+            if (binding.DescriptionPrefix == null || binding.BaseDescription == null) return;
+            binding.Item.Description = binding.DescriptionPrefix(value) + binding.BaseDescription;
         }
 
         // Same contract as WireFloatField, for int rows: The int bounds, an exact read back, and the display text's length for the width check
@@ -851,7 +848,7 @@ namespace RHE
             currentContext.MainMenuItem.Title = hasVehicle && AnyAdditionalEditorMounted() ? string.Format(TITLE_EDIT_CURRENT_NAMED, modelNames.ResolveModelName(currentContext.LastSyncedVehicle)) : TITLE_EDIT_CURRENT_HANDLING;
         }
 
-        // A null scope refreshes every menu, which a vehicle change or descriptor reload needs
+        // A null scope refreshes every menu, which a vehicle change needs
         private void SyncFieldValues(NativeMenu scope = null)
         {
             SyncFieldValues(scope, currentContext.TargetVehicle);
@@ -1053,15 +1050,13 @@ namespace RHE
                 bool alreadyInState = binding.Item.Enabled == !locked;
                 if (alreadyInState) return;
                 binding.Item.Enabled = !locked;
-                if (binding.Tracked == null) return;
                 string hexPrefix = FlagHashPrefix(SF_WORKS_UPSIDE_DOWN_BIT);
-                binding.Tracked.Prefix = locked ? DESC_WORKS_UPSIDE_DOWN_LOCK_PREFIX + hexPrefix : hexPrefix;
-                binding.Item.Description = binding.Tracked.Prefix + ResolveDescriptor(binding.Tracked.Category, binding.Tracked.FieldName);
+                binding.Item.Description = (locked ? DESC_WORKS_UPSIDE_DOWN_LOCK_PREFIX + hexPrefix : hexPrefix) + binding.BaseDescription;
                 return;
             }
         }
 
-        // Refreshes Current's tree plus every mounted extra editor, for an event that affects every live tree at once (a descriptor reload)
+        // Refreshes Current's tree plus every mounted extra editor, for an event that affects every live tree at once (a script reload's menu restore)
         private void SyncAllMountedEditors()
         {
             for (int i = 0; i < editorContexts.Length; i++)
@@ -1324,8 +1319,10 @@ namespace RHE
                     }
                     else
                     {
-                        // A submenu row copies its menu's description every frame, so the required-category text goes on the menu, and it is the row's whole description
-                        string liveDescription = IsLiveCreationOffered(categoryName, vehicle.Type) && IsLiveDeletionRefused(categoryName, vehicle) ? DESC_CATEGORY_REQUIRED_LIVE : string.Empty;
+                        // A submenu row copies its menu's description every frame, so the Delete text goes on the menu, and it is the row's whole description
+                        string liveDescription = string.Empty;
+                        if (IsLiveCreationOffered(categoryName, vehicle.Type) && IsLiveDeletionRefused(categoryName, vehicle)) liveDescription = DESC_CATEGORY_REQUIRED_LIVE;
+                        else if (liveSubHandlingData && IsLiveBackendAvailable() && IsPhantomOnlyOnType(category.Definition, vehicle.Type)) liveDescription = DESC_CATEGORY_PHANTOM_ONLY_LIVE;
                         if (category.LiveMenu.Description != liveDescription) category.LiveMenu.Description = liveDescription;
                         resolved[i] = category.LiveSubmenu;
                     }
@@ -1335,9 +1332,9 @@ namespace RHE
                 else
                 {
                     bool liveOnThisType = IsLiveCreationOffered(categoryName, vehicle.Type);
-                    // With the setting, the offsets, and the plugin all in place, the allow list is the only thing keeping the category export-only
-                    bool onlyAllowListRefuses = !liveOnThisType && liveSubHandlingData && IsLiveBackendAvailable();
-                    category.Placeholder.Description = liveOnThisType ? PLACEHOLDER_SUBDATA_CREATE_LIVE : onlyAllowListRefuses ? PLACEHOLDER_SUBDATA_NOT_LIVE_ON_TYPE : PLACEHOLDER_SUBDATA_NOT_PRESENT;
+                    // With the setting, the offsets, and the plugin all in place, only the vehicle's type keeps the category phantom, as with Boat offered on an off-road car
+                    bool onlyTypeRefuses = !liveOnThisType && liveSubHandlingData && IsLiveBackendAvailable();
+                    category.Placeholder.Description = liveOnThisType ? PLACEHOLDER_SUBDATA_CREATE_LIVE : onlyTypeRefuses ? PLACEHOLDER_SUBDATA_NOT_LIVE_ON_TYPE : PLACEHOLDER_SUBDATA_NOT_PRESENT;
                     resolved[i] = category.Placeholder;
                 }
                 if (!present) BackOutLiveCategoryMenus(context, category);

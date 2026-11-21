@@ -10,7 +10,7 @@ namespace RHE
         private readonly IOwnedFileWatcher fileWatcher;
 
         // The files the script reacts to when something outside it changes them
-        private enum OwnedFile { Ini, Descriptors, SavedHandlings, ModelMetaData }
+        private enum OwnedFile { Ini, SavedHandlings, ModelMetaData }
 
         private interface IOwnedFileWatcher
         {
@@ -25,7 +25,6 @@ namespace RHE
         {
             private readonly ILogger logger;
             private readonly string iniFullPath;
-            private readonly string descriptorsFullPath;
             private readonly string exportsFullPath;
             private readonly string modelMetaDataFullPath;
             private readonly List<FileSystemWatcher> watchers = new List<FileSystemWatcher>();
@@ -40,13 +39,12 @@ namespace RHE
             {
                 this.logger = logger;
                 iniFullPath = Path.GetFullPath(iniPath);
-                descriptorsFullPath = Path.GetFullPath(DESCRIPTORS_PATH);
                 // Held with no trailing separator, so an event on the Exports folder itself matches as well as one inside it
                 exportsFullPath = Path.GetFullPath(EXPORTS_DIR).TrimEnd(Path.DirectorySeparatorChar);
                 modelMetaDataFullPath = Path.GetFullPath(MODEL_METADATA_FILE_PATH);
                 StartWatcher(Path.GetDirectoryName(iniFullPath), Path.GetFileName(iniFullPath), false, OwnedFile.Ini);
-                // One watcher covers the descriptors file and the whole Exports tree, Autosaves included, since both sit in the script's own folder
-                StartWatcher(Path.GetDirectoryName(descriptorsFullPath), "*", true, OwnedFile.Descriptors, OwnedFile.SavedHandlings);
+                // Watches the script's own folder rather than the Exports folder, so the Exports folder being created or deleted counts too, Autosaves included
+                StartWatcher(Path.GetFullPath(SCRIPT_FOLDER_PATH), "*", true, OwnedFile.SavedHandlings);
                 StartWatcher(Path.GetDirectoryName(modelMetaDataFullPath), Path.GetFileName(modelMetaDataFullPath), false, OwnedFile.ModelMetaData);
             }
 
@@ -84,7 +82,6 @@ namespace RHE
             private void MarkPathChanged(string fullPath)
             {
                 if (string.Equals(fullPath, iniFullPath, StringComparison.OrdinalIgnoreCase)) MarkChanged(OwnedFile.Ini);
-                else if (string.Equals(fullPath, descriptorsFullPath, StringComparison.OrdinalIgnoreCase)) MarkChanged(OwnedFile.Descriptors);
                 else if (string.Equals(fullPath, modelMetaDataFullPath, StringComparison.OrdinalIgnoreCase)) MarkChanged(OwnedFile.ModelMetaData);
                 else if (string.Equals(fullPath, exportsFullPath, StringComparison.OrdinalIgnoreCase) || fullPath.StartsWith(exportsFullPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) MarkChanged(OwnedFile.SavedHandlings);
             }

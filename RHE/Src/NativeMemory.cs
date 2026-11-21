@@ -416,31 +416,11 @@ namespace RHE
                 return warnings;
             }
 
-            // Identifies one struct's raw-memory region for one direction, so a later request within an already validated region can skip the VirtualQuery kernel call
-            private struct RawAddressCacheKey : IEquatable<RawAddressCacheKey>
-            {
-                public IntPtr BaseAddress;
-                public bool Write;
-                public bool Equals(RawAddressCacheKey other) { return BaseAddress == other.BaseAddress && Write == other.Write; }
-                public override bool Equals(object obj) { return obj is RawAddressCacheKey && Equals((RawAddressCacheKey)obj); }
-                public override int GetHashCode() { return BaseAddress.GetHashCode() ^ (Write ? 1 : 0); }
-            }
-
-            // Caches the *whole* committed region VirtualQuery reported for this struct+direction, so any other offset landing inside it is a cache hit too
-            private struct RawAddressCacheEntry { public IntPtr RegionStart; public ulong RegionSize; public int ValidatedAtMs; }
-            private static Dictionary<RawAddressCacheKey, RawAddressCacheEntry> rawAddressCache = new Dictionary<RawAddressCacheKey, RawAddressCacheEntry>();
-            private static List<RawAddressCacheKey> rawAddressCacheExpiredKeys = new List<RawAddressCacheKey>();
-            private static int rawAddressCacheLastPruneMs;
-
-            // Drops every entry past its TTL once per RAW_ADDRESS_CACHE_PRUNE_INTERVAL_MS, run from the lookup that already reads the clock
-            private static void PruneRawAddressCache(int nowMs)
-            {
-                if (nowMs - rawAddressCacheLastPruneMs < RAW_ADDRESS_CACHE_PRUNE_INTERVAL_MS) return;
-                rawAddressCacheLastPruneMs = nowMs;
-                rawAddressCacheExpiredKeys.Clear();
-                foreach (var pair in rawAddressCache) if (nowMs - pair.Value.ValidatedAtMs >= RAW_ADDRESS_CACHE_TTL_MS) rawAddressCacheExpiredKeys.Add(pair.Key);
-                for (int i = 0; i < rawAddressCacheExpiredKeys.Count; i++) rawAddressCache.Remove(rawAddressCacheExpiredKeys[i]);
-            }
+            // One region VirtualQuery reported, so every later request inside it skips the kernel call, whatever object it reads
+            // A query sizes its region by walking the pages, which takes milliseconds on the game's large heap regions, so a region is queried once per script load
+            // The game's heap regions stay mapped for the life of the process, and an access violation evicts the region holding the address (EvictRawRegion)
+            private struct RawRegionCacheEntry { public ulong RegionStart; public ulong RegionSize; public bool Writable; }
+            private static readonly List<RawRegionCacheEntry> rawRegionCache = new List<RawRegionCacheEntry>();
 
             // One shared implementation validates a fresh VirtualQuery result and tests a cache hit, so the two checks can never drift apart
             private static bool IsSpanWithinRegion(ulong regionStart, ulong regionSize, ulong requestedStart, ulong requestedSize)
@@ -448,20 +428,35 @@ namespace RHE
                 return requestedStart >= regionStart && requestedStart - regionStart <= regionSize && requestedSize <= regionSize - (requestedStart - regionStart);
             }
 
-            private static void EvictRawAddressCacheEntry(IntPtr address)
+            // An entry whose region holds the whole span and allows the direction, or -1
+            private static int FindRawRegion(ulong requestedStart, ulong requestedSize, bool write)
+            {
+                for (int i = 0; i < rawRegionCache.Count; i++)
+                {
+                    RawRegionCacheEntry entry = rawRegionCache[i];
+                    if (write && !entry.Writable) continue;
+                    if (IsSpanWithinRegion(entry.RegionStart, entry.RegionSize, requestedStart, requestedSize)) return i;
+                }
+                return -1;
+            }
+
+            // A fresh query replaces the entry for the same region, so the list holds each region once
+            private static void StoreRawRegion(ulong regionStart, ulong regionSize, bool writable)
+            {
+                var entry = new RawRegionCacheEntry { RegionStart = regionStart, RegionSize = regionSize, Writable = writable };
+                for (int i = 0; i < rawRegionCache.Count; i++)
+                {
+                    if (rawRegionCache[i].RegionStart != regionStart) continue;
+                    rawRegionCache[i] = entry;
+                    return;
+                }
+                rawRegionCache.Add(entry);
+            }
+
+            private static void EvictRawRegion(IntPtr address)
             {
                 ulong violatingAddress = unchecked((ulong)address.ToInt64());
-                RawAddressCacheKey? staleKey = null;
-                foreach (var pair in rawAddressCache)
-                {
-                    ulong regionStart = unchecked((ulong)pair.Value.RegionStart.ToInt64());
-                    if (violatingAddress >= regionStart && violatingAddress - regionStart < pair.Value.RegionSize)
-                    {
-                        staleKey = pair.Key;
-                        break;
-                    }
-                }
-                if (staleKey.HasValue) rawAddressCache.Remove(staleKey.Value);
+                rawRegionCache.RemoveAll(entry => violatingAddress >= entry.RegionStart && violatingAddress - entry.RegionStart < entry.RegionSize);
             }
 
             [StructLayout(LayoutKind.Sequential)]
@@ -581,7 +576,7 @@ namespace RHE
             public static void WriteDerivedFloat(HandlingData handling, int offset, float value)
             {
                 if (!rawOffsetsSupported || handling == null || !handling.IsValid) return;
-                WriteRawInt32(handling.MemoryAddress, offset, BitConverter.ToInt32(BitConverter.GetBytes(value), 0));
+                WriteRawInt32(handling.MemoryAddress, offset, SingleToInt32Bits(value));
             }
 
             private static bool IsReadableProtection(uint protection)
@@ -628,12 +623,7 @@ namespace RHE
                 }
                 ulong requestedStart = unchecked((ulong)addressValue);
                 ulong requestedSize = (uint)byteCount;
-                RawAddressCacheKey cacheKey = new RawAddressCacheKey { BaseAddress = baseAddress, Write = write };
-                RawAddressCacheEntry cached;
-                int nowMs = Environment.TickCount;
-                PruneRawAddressCache(nowMs);
-                if (rawAddressCache.TryGetValue(cacheKey, out cached) && nowMs - cached.ValidatedAtMs < RAW_ADDRESS_CACHE_TTL_MS &&
-                    IsSpanWithinRegion(unchecked((ulong)cached.RegionStart.ToInt64()), cached.RegionSize, requestedStart, requestedSize))
+                if (FindRawRegion(requestedStart, requestedSize, write) >= 0)
                 {
                     address = new IntPtr(addressValue);
                     return true;
@@ -659,7 +649,7 @@ namespace RHE
                     return false;
                 }
                 address = new IntPtr(addressValue);
-                rawAddressCache[cacheKey] = new RawAddressCacheEntry { RegionStart = region.BaseAddress, RegionSize = regionSize, ValidatedAtMs = nowMs };
+                StoreRawRegion(regionStart, regionSize, IsWritableProtection(protection));
                 return true;
             }
 
@@ -674,7 +664,7 @@ namespace RHE
                 }
                 catch (AccessViolationException)
                 {
-                    EvictRawAddressCacheEntry(address);
+                    EvictRawRegion(address);
                     NoteRawMemoryAccessFailure("address 0x" + address.ToInt64().ToString("X") + "; ReadInt32 access violation");
                     return false;
                 }
@@ -690,7 +680,7 @@ namespace RHE
                 }
                 catch (AccessViolationException)
                 {
-                    EvictRawAddressCacheEntry(address);
+                    EvictRawRegion(address);
                     NoteRawMemoryAccessFailure("address 0x" + address.ToInt64().ToString("X") + "; WriteInt32 access violation");
                     return false;
                 }
@@ -706,7 +696,7 @@ namespace RHE
                 }
                 catch (AccessViolationException)
                 {
-                    EvictRawAddressCacheEntry(address);
+                    EvictRawRegion(address);
                     NoteRawMemoryAccessFailure("address 0x" + address.ToInt64().ToString("X") + "; WriteInt16 access violation");
                     return false;
                 }
@@ -723,7 +713,7 @@ namespace RHE
                 }
                 catch (AccessViolationException)
                 {
-                    EvictRawAddressCacheEntry(address);
+                    EvictRawRegion(address);
                     NoteRawMemoryAccessFailure("address 0x" + address.ToInt64().ToString("X") + "; ReadInt16 access violation");
                     return false;
                 }
@@ -740,7 +730,7 @@ namespace RHE
                 }
                 catch (AccessViolationException)
                 {
-                    EvictRawAddressCacheEntry(address);
+                    EvictRawRegion(address);
                     NoteRawMemoryAccessFailure("address 0x" + address.ToInt64().ToString("X") + "; ReadIntPtr access violation");
                     return false;
                 }
@@ -781,11 +771,22 @@ namespace RHE
                 return GetRawMemoryAddress(baseAddress, offset, IntPtr.Size, false, out address) && ReadIntPtrAt(address, out value);
             }
 
+            // One 4 byte value seen as both an int and a float, so a float's bits convert with no allocation, where BitConverter allocates an array per call
+            [StructLayout(LayoutKind.Explicit)]
+            private struct FloatBits
+            {
+                [FieldOffset(0)] public int Bits;
+                [FieldOffset(0)] public float Value;
+            }
+
+            private static float Int32BitsToSingle(int bits) { return new FloatBits { Bits = bits }.Value; }
+            private static int SingleToInt32Bits(float value) { return new FloatBits { Value = value }.Bits; }
+
             public static float ReadRawFloat(IntPtr baseAddress, int offset)
             {
                 if (!rawOffsetsSupported) return 0.0f;
                 int value;
-                return ReadRawInt32(baseAddress, offset, out value) ? BitConverter.ToSingle(BitConverter.GetBytes(value), 0) : 0.0f;
+                return ReadRawInt32(baseAddress, offset, out value) ? Int32BitsToSingle(value) : 0.0f;
             }
 
             public static bool ReadRawFloat(IntPtr baseAddress, int offset, out float value)
@@ -793,22 +794,41 @@ namespace RHE
                 value = 0.0f;
                 int bits;
                 if (!rawOffsetsSupported || !ReadRawInt32(baseAddress, offset, out bits)) return false;
-                value = BitConverter.ToSingle(BitConverter.GetBytes(bits), 0);
+                value = Int32BitsToSingle(bits);
                 return true;
             }
 
+            // The 3 floats are validated as one span, so a vector costs one region check instead of 3
             public static bool ReadRawVector3(IntPtr baseAddress, int offset, out Vector3 value)
             {
                 value = Vector3.Zero;
-                float x, y, z;
-                if (!ReadRawFloat(baseAddress, offset, out x) || !ReadRawFloat(baseAddress, offset + 4, out y) || !ReadRawFloat(baseAddress, offset + 8, out z)) return false;
-                value = new Vector3(x, y, z);
+                IntPtr address;
+                if (!rawOffsetsSupported || !GetRawMemoryAddress(baseAddress, offset, 3 * sizeof(float), false, out address)) return false;
+                return ReadVector3At(address, out value);
+            }
+
+            // The first 3 floats of each of 4 columns spaced columnStride apart, validated as one span from the first column to the end of the last
+            public static bool ReadRawMatrixColumns(IntPtr baseAddress, int offset, int columnStride, out Vector3 column0, out Vector3 column1, out Vector3 column2, out Vector3 column3)
+            {
+                column0 = column1 = column2 = column3 = Vector3.Zero;
+                IntPtr address;
+                if (!rawOffsetsSupported || !GetRawMemoryAddress(baseAddress, offset, 3 * columnStride + 3 * sizeof(float), false, out address)) return false;
+                return ReadVector3At(address, out column0) && ReadVector3At(address + columnStride, out column1) && ReadVector3At(address + 2 * columnStride, out column2)
+                    && ReadVector3At(address + 3 * columnStride, out column3);
+            }
+
+            private static bool ReadVector3At(IntPtr address, out Vector3 value)
+            {
+                value = Vector3.Zero;
+                int x, y, z;
+                if (!ReadInt32At(address, out x) || !ReadInt32At(address + 4, out y) || !ReadInt32At(address + 8, out z)) return false;
+                value = new Vector3(Int32BitsToSingle(x), Int32BitsToSingle(y), Int32BitsToSingle(z));
                 return true;
             }
 
             public static void WriteRawFloat(IntPtr baseAddress, int offset, float value)
             {
-                if (rawOffsetsSupported) WriteRawInt32(baseAddress, offset, BitConverter.ToInt32(BitConverter.GetBytes(value), 0));
+                if (rawOffsetsSupported) WriteRawInt32(baseAddress, offset, SingleToInt32Bits(value));
             }
 
             // Genuine int fields at a raw offset (e.g. SeaPlane pontoon component IDs), with no bit-reinterpretation, unlike ReadRawFloat/WriteRawFloat
@@ -948,7 +968,7 @@ namespace RHE
                 int valueBits;
                 if (!ReadRawInt32(element, AdvancedDataLayout.ElementSlot, out entry.Slot) || !ReadRawInt32(element, AdvancedDataLayout.ElementIndex, out entry.Index) ||
                     !ReadRawInt32(element, AdvancedDataLayout.ElementValue, out valueBits)) return false;
-                entry.Value = BitConverter.ToSingle(BitConverter.GetBytes(valueBits), 0);
+                entry.Value = Int32BitsToSingle(valueBits);
                 return true;
             }
 
@@ -958,7 +978,7 @@ namespace RHE
                 IntPtr element = GetAdvancedDataElementAddress(handling, index);
                 if (element == IntPtr.Zero) return false;
                 return WriteRawInt32(element, AdvancedDataLayout.ElementSlot, entry.Slot) && WriteRawInt32(element, AdvancedDataLayout.ElementIndex, entry.Index) &&
-                    WriteRawInt32(element, AdvancedDataLayout.ElementValue, BitConverter.ToInt32(BitConverter.GetBytes(entry.Value), 0));
+                    WriteRawInt32(element, AdvancedDataLayout.ElementValue, SingleToInt32Bits(entry.Value));
             }
 
             // Returns the address of the index'th AdvancedData element, or IntPtr.Zero when out of range, re-deriving the array pointer fresh every call

@@ -1154,12 +1154,7 @@ namespace RHE
             try
             {
                 ApplyHandlingDocument(history.Baseline, handling, undoVehicle, ResolveHandlingFieldGates(undoVehicle), LiveRequestOrigin.UndoAll, ref run.Flags, out fieldsInvalid, out fieldsAbsent, presentCategoriesNotCarried);
-                int notRemoved = RemoveCategoriesCreatedByApply(handling, undoVehicle, presentCategoriesNotCarried, LiveRequestOrigin.UndoAll);
-                if (notRemoved > 0)
-                {
-                    run.NotReverted += notRemoved;
-                    run.Failures.Add(new KeyValuePair<string, string>("Categories the baseline lacks", notRemoved + " could not be removed"));
-                }
+                RemoveCategoriesCreatedByApply(handling, undoVehicle, presentCategoriesNotCarried, LiveRequestOrigin.UndoAll);
             }
             catch (Exception ex) { AddUndoAllFailure(run, "Baseline apply", ex.Message); }
             finally { undoAllRunInProgress = null; }

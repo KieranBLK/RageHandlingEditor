@@ -31,6 +31,9 @@ namespace RHE
         private List<KeyValuePair<string, int>> searchKeyBuildIndex;
         private int searchKeyBuildPosition;
         private List<SavedHandlingKey> searchKeyBuildKeys;
+        // The model of the search row last highlighted, 0 for the New Search row, and null before any search row was highlighted
+        // The Search row reopens on it, since the list reruns from the query and a row index can name a different model
+        private int? lastSearchHighlightModelHash;
 
         // The base-game model names (the API's VehicleHash list) merged with the ModelMetaData file's names
         // A name is kept only when it hashes back to its own model hash
@@ -119,11 +122,14 @@ namespace RHE
             StoreSearchResults("", allKeys, allKeys.Length);
         }
 
-        // The main menu's Search row. Lists every model with no prompt, and works with no vehicle
+        // The main menu's Search row, which works with no vehicle and never prompts
+        // The last query reruns until Clear Search empties it, since the name index can change between opens, and one with no match left shows the full list
+        // The remembered row is read first, since opening Saved Handlings rebuilds its rows and moves the highlight
         private void OpenVehicleSearch()
         {
-            StoreFullSearchList();
-            ShowSearchList();
+            int? rememberedModelHash = lastSearchHighlightModelHash;
+            if (!RestoreVehicleSearch(searchQueryText)) StoreFullSearchList();
+            ShowSearchList(rememberedModelHash);
         }
 
         // The New Search row. The prompt opens empty, and an empty or canceled prompt returns to the full list with no toast
@@ -151,7 +157,7 @@ namespace RHE
                 return;
             }
             StoreSearchResults(shownText, matches.ToArray(), totalMatches);
-            ShowSearchList();
+            ShowSearchList(null);
             if (totalMatches > matches.Count) notifications.Notify(NOTIFICATION_KEY_VEHICLE_SEARCH, string.Format(NOTIF_SEARCH_TRUNCATED, matches.Count, totalMatches));
         }
 
@@ -162,11 +168,13 @@ namespace RHE
         private void ClearVehicleSearch()
         {
             StoreFullSearchList();
-            ShowSearchList();
+            ShowSearchList(null);
         }
 
         // Saved Handlings' own Shown refresh builds the rows when it opens from the main menu. From its own New Search row it is already open and refreshes directly
-        private void ShowSearchList()
+        // A remembered row still in the list keeps the highlight
+        // Otherwise a narrowed list lands on its first result, and the full list on New Search, the row a player with no query wants next
+        private void ShowSearchList(int? highlightModelHash)
         {
             if (mainMenu.Visible)
             {
@@ -174,7 +182,24 @@ namespace RHE
                 ShowMenu(savedHandlingsMenu);
             }
             else RefreshSavedHandlingsMenu();
-            savedHandlingsMenu.SelectedIndex = SavedHandlingRowOffset;
+            int index = searchQueryText.Length == 0 ? 0 : SavedHandlingRowOffset;
+            if (highlightModelHash == 0) index = 0;
+            else if (highlightModelHash.HasValue)
+            {
+                for (int i = 0; i < searchResultKeys.Length; i++)
+                {
+                    if (searchResultKeys[i].ModelHash != highlightModelHash.Value) continue;
+                    index = i + SavedHandlingRowOffset;
+                    break;
+                }
+            }
+            savedHandlingsMenu.SelectedIndex = index;
+        }
+
+        // Runs on every highlight move in Saved Handlings, and records only while the search list shows
+        private void RecordSearchHighlight()
+        {
+            if (browsedSource == searchSource) lastSearchHighlightModelHash = GetHighlightedPreviewKey().ModelHash;
         }
 
         // The rows build when Saved Handlings next refreshes
@@ -190,17 +215,19 @@ namespace RHE
         }
 
         // Runs with no prompt and no toast, and an empty text restores the full list
-        // A typed text with no match leaves Saved Handlings on Exports
-        private void RestoreVehicleSearch(string typed)
+        // A typed text with no match stores nothing and returns False, which leaves Saved Handlings on Exports after a reload
+        private bool RestoreVehicleSearch(string typed)
         {
             if (typed.Length == 0)
             {
                 StoreFullSearchList();
-                return;
+                return true;
             }
             int totalMatches;
             List<SavedHandlingKey> matches = FindVehicleModelMatches(typed, out totalMatches);
-            if (matches.Count > 0) StoreSearchResults(typed, matches.ToArray(), totalMatches);
+            if (matches.Count == 0) return false;
+            StoreSearchResults(typed, matches.ToArray(), totalMatches);
+            return true;
         }
 
         // Neither saved folder is scanned

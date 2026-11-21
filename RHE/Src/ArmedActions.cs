@@ -118,6 +118,13 @@ namespace RHE
             bool refusedLiveDeletion = false;
             if (!excluded && !Entity.IsNullOrNotExisting(vehicle) && vehicle.HandlingData.IsValid)
             {
+                // A refused SeaPlane deletion never falls back to the exclusion, since the player has to move the vehicle and press again
+                if (category == CATEGORY_SEA_PLANE && IsLiveDeletionAllowedFor(LiveRequestOrigin.Player, category, vehicle) && IsAnyVehicleOnHandlingOnOrNearWater(ResolveHandlingKey(vehicle)))
+                {
+                    logger.Log(Dbg.Level.Info, Dbg.LiveSubDataDeletionFailed(modelNames.ResolveModelName(vehicle), vehicle.Model.Hash, category, SEA_PLANE_NEAR_WATER_REASON));
+                    notifications.Notify(NOTIFICATION_KEY_PREFIX_LIVE_SUBDATA + category, NOTIF_SEA_PLANE_DELETE_IN_WATER);
+                    return;
+                }
                 string reason;
                 if (BeginLiveCategoryDeletion(context, category, vehicle, null, LiveRequestOrigin.Player, out reason)) return;
                 // Live deletion was on offer but the game reads this category as required, so the toast says why it only excludes
