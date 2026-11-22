@@ -51,25 +51,32 @@ namespace RHE
             return (float)Math.Round(next, 6);
         }
 
-        // Holding the modifier is the player's own choice of precision, and only a value within one step of 0 shrinks the step, in either direction
-        // A press away from 0 shrinks only while the value is under one step, so the shrink holds on the way back out
-        // A press at 0 keeps the field's step, so a run through 0 stays at full speed
-        private bool IsPrecisionCyclingPress(float current, double fieldStep, int stepDirection)
+        // Holding the modifier is the player's own choice of precision, at any value
+        // A press at 0 keeps the field's step, so a run through 0 stays at full speed and a press away from 0 never starts below the near-0 shrink
+        private bool IsPrecisionCyclingPress(float current)
         {
-            if (current == 0.0f) return false;
-            double size = Math.Abs(SnapToCleanValue(current));
-            bool towardZero = Math.Sign(current) != stepDirection;
-            if (towardZero ? size > fieldStep : size >= fieldStep * PRECISION_CYCLING_EQUAL_RATIO) return false;
-            return ModifierHeld();
+            return current != 0.0f && ModifierHeld();
         }
 
-        // The largest of the field step's tenths, hundredths, and so on that is smaller than the value's size
-        // Each press then lands one decimal finer as the value nears 0. A step within division noise of the size counts as equal to it
-        private static double ResolvePrecisionCyclingStep(float current, double fieldStep)
+        // Within one step of 0 the step shrinks with the value's size, in either direction
+        // A press away from 0 counts only while the value is under one step, so the shrink holds on the way back out
+        private static bool IsNearZeroPrecisionPress(float current, double fieldStep, int stepDirection)
         {
             double size = Math.Abs(SnapToCleanValue(current));
+            bool towardZero = Math.Sign(current) != stepDirection;
+            return towardZero ? size <= fieldStep : size < fieldStep * PRECISION_CYCLING_EQUAL_RATIO;
+        }
+
+        // A tenth of the field step anywhere, and near 0 the largest of its tenths, hundredths, and so on that is smaller than the value's size
+        // Near 0 each press then lands one decimal finer as the value nears it. A step within division noise of the size counts as equal to it
+        private static double ResolvePrecisionCyclingStep(float current, double fieldStep, bool nearZero)
+        {
             double step = fieldStep / PRECISION_CYCLING_DIVISOR;
-            while (step >= size * PRECISION_CYCLING_EQUAL_RATIO && step / PRECISION_CYCLING_DIVISOR >= PRECISION_CYCLING_MIN) step /= PRECISION_CYCLING_DIVISOR;
+            if (nearZero)
+            {
+                double size = Math.Abs(SnapToCleanValue(current));
+                while (step >= size * PRECISION_CYCLING_EQUAL_RATIO && step / PRECISION_CYCLING_DIVISOR >= PRECISION_CYCLING_MIN) step /= PRECISION_CYCLING_DIVISOR;
+            }
             return Math.Max(step, PRECISION_CYCLING_MIN);
         }
 
@@ -220,12 +227,13 @@ namespace RHE
                 HandlingData handling = store.Handling();
                 float fieldStep = entry.StepResolver != null && handling != null ? entry.StepResolver(handling) : entry.Step;
                 int stepDirection = e.Direction == LemonUI.Menus.Direction.Left ? -1 : 1;
-                bool precisionCycling = !entry.FixedStep && IsPrecisionCyclingPress(current, fieldStep, stepDirection);
-                double effectiveStep = precisionCycling ? ResolvePrecisionCyclingStep(current, fieldStep) : fieldStep;
+                bool precisionCycling = !entry.FixedStep && IsPrecisionCyclingPress(current);
+                bool nearZero = precisionCycling && IsNearZeroPrecisionPress(current, fieldStep, stepDirection);
+                double effectiveStep = precisionCycling ? ResolvePrecisionCyclingStep(current, fieldStep, nearZero) : fieldStep;
                 float stepped = entry.StepOverride != null ? entry.StepOverride(current, effectiveStep, e.Direction) : StepRoundedInDouble(current, effectiveStep, e.Direction);
-                // A precision step never carries the value past 0 or past one field step, so both are stops on the way through
-                if (precisionCycling && Math.Sign(stepped) == -Math.Sign(current)) stepped = 0.0f;
-                else if (precisionCycling && Math.Abs(stepped) > fieldStep) stepped = (float)(Math.Sign(stepped) * fieldStep);
+                // A near-0 precision step never carries the value past 0 or past one field step, so both are stops on the way through
+                if (nearZero && Math.Sign(stepped) == -Math.Sign(current)) stepped = 0.0f;
+                else if (nearZero && Math.Abs(stepped) > fieldStep) stepped = (float)(Math.Sign(stepped) * fieldStep);
                 float next = ApplyCycleBounds(entry, ApplyHardBounds(entry, stepped, stepDirection));
                 if (next == current)
                 {
