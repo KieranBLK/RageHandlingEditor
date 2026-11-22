@@ -15,6 +15,4 @@ Mod page: https://www.gta5-mods.com/scripts/ragehandlingeditor-rhe-legacy-enhanc
 - `msbuild RHE/Accessories/<Name>/<Name>.vcxproj -p:Configuration=Release -p:Platform=x64 -p:SdkDir=<SDK folder>\` builds `<Name>.asi` into that project's `bin` folder, which goes in the game root
 
 ## LICENSE
-This mod is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, change, and share it for any noncommercial purpose. Redistribution of the mod, edited or not, must include this license, in full and unmodified, along with its required notice:
-
-`Required Notice: Copyright 2026 KieranBLK (https://github.com/KieranBLK/RageHandlingEditor)`
+This mod is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, change, and share it for any noncommercial purpose. Redistribution of the mod, in any form, edited or not, must include this license, in full, as is.
