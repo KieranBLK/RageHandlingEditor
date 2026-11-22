@@ -24,14 +24,15 @@ namespace RHE
         // Only these are removed when a later applied document no longer mentions them. Persists across a reload in the PhantomSubData section of the reload state
         private Dictionary<HandlingKey, HashSet<string>> adoptedPhantomCategories = new Dictionary<HandlingKey, HashSet<string>>();
 
-        private static string[] GetSubDataCreationCandidates(VehicleType type, VehicleClass vehicleClass)
+        private static string[] GetSubDataCreationCandidates(Vehicle vehicle)
         {
             var candidates = new List<string>();
+            VehicleType type = vehicle.Type;
             foreach (CategoryDefinition definition in CategoryDefinitions)
             {
                 bool offered = OFFER_EVERY_PHANTOM_CATEGORY || definition.CandidateTypes == null;
-                if (!offered) offered = ContainsVehicleType(definition.CandidateTypes, type);
-                if (!offered) offered = definition.OfferedOnOffRoadCars && type == VehicleType.Automobile && vehicleClass == VehicleClass.OffRoad;
+                if (!offered) offered = ContainsVehicleType(definition.CandidateTypes, type) && (definition.CandidateCheck == null || definition.CandidateCheck(vehicle));
+                if (!offered) offered = definition.OfferedOnOffRoadCars && type == VehicleType.Automobile && vehicle.ClassType == VehicleClass.OffRoad;
                 if (offered) candidates.Add(definition.Name);
             }
             return candidates.ToArray();

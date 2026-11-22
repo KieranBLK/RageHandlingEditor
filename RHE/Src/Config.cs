@@ -32,8 +32,8 @@ namespace RHE
         private bool autosaveEnabled;
         private bool previewByDefault;
         private bool showPreviewDiff;
+        private bool checkForUpdates;
         private bool reassertDriftedFields;
-        private bool liveSubHandlingData;
         private int loggingMode;
         private bool alwaysClearLogOnReload;
 
@@ -73,8 +73,8 @@ namespace RHE
             autosaveEnabled = true;
             previewByDefault = true;
             showPreviewDiff = true;
+            checkForUpdates = true;
             reassertDriftedFields = true;
-            liveSubHandlingData = false;
             loggingMode = LOGGING_MODE_DEFAULT;
             alwaysClearLogOnReload = true;
         }
@@ -104,6 +104,8 @@ namespace RHE
             AppendIniComment(sb, CMT_SCR_AutoRespawn1);
             AppendIniComment(sb, AutoRespawnDelayedComment());
             sb.AppendLine(KEY_SCR_AutoRespawn + " = " + autoRespawnMode);
+            AppendIniComment(sb, CMT_SCR_CheckForUpdates);
+            sb.AppendLine(KEY_SCR_CheckForUpdates + " = " + FormatIniBool(checkForUpdates));
             AppendIniComment(sb, CMT_SCR_ReassertDriftedFields);
             sb.AppendLine(KEY_SCR_ReassertDriftedFields + " = " + FormatIniBool(reassertDriftedFields));
             sb.AppendLine();
@@ -140,10 +142,6 @@ namespace RHE
             AppendIniComment(sb, CMT_APR_MenuPosition);
             sb.AppendLine(KEY_APR_MenuPosition + " = " + (menuAlignLeft ? "Left" : "Right"));
             sb.AppendLine();
-            sb.AppendLine(SECTION_Experimental);
-            AppendIniComment(sb, CMT_EXP_LiveSubHandlingData);
-            sb.AppendLine(KEY_EXP_LiveSubHandlingData + " = " + FormatIniBool(liveSubHandlingData));
-            sb.AppendLine();
             sb.AppendLine(SECTION_Debug);
             AppendIniComment(sb, CMT_DBG_AlwaysClearLogOnReload);
             sb.AppendLine(KEY_DBG_AlwaysClearLogOnReload + " = " + FormatIniBool(alwaysClearLogOnReload));
@@ -167,12 +165,38 @@ namespace RHE
             return string.Format(CMT_SCR_AutoRespawn2, (AUTO_RESPAWN_DELAY_MS / 1000.0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture));
         }
 
+        // A game that dies mid-write leaves only the copy half written, so the file itself is always either the old whole or the new whole
+        // The INI, saved handlings, and the reload state all write through here
+        private static void WriteFileReplacing(string path, string content) { CommitReplacingWrite(WriteReplacingCopy(path, content), path); }
+
+        // Fills the copy beside the file and returns its path, for a caller that checks the copy before CommitReplacingWrite swaps it in
+        private static string WriteReplacingCopy(string path, string content)
+        {
+            string copyPath = path + REPLACING_WRITE_SUFFIX;
+            File.WriteAllText(copyPath, content);
+            return copyPath;
+        }
+
+        // File.Replace needs the file to exist already, so a first write copies the copy into place instead
+        // A move would rename it, and OpenIV never lists a file renamed into place until it restarts, while a copy creates the file anew
+        // A crash mid-copy can leave only a half new file, since no earlier file existed to lose
+        private static void CommitReplacingWrite(string copyPath, string path)
+        {
+            if (File.Exists(path))
+            {
+                File.Replace(copyPath, path, null);
+                return;
+            }
+            File.Copy(copyPath, path);
+            File.Delete(copyPath);
+        }
+
         private void WriteDefaultIni()
         {
             try
             {
                 List<KeyValuePair<string, string>> previousSnapshot = lastSettingsSnapshot;
-                File.WriteAllText(iniPath, BuildIniEntries());
+                WriteFileReplacing(iniPath, BuildIniEntries());
                 try
                 {
                     iniLastWriteTime = File.GetLastWriteTime(iniPath);
@@ -374,8 +398,8 @@ namespace RHE
             ApplyIniBool(changedValues, KEY_EXG_Autosave, ref autosaveEnabled);
             ApplyIniBool(changedValues, KEY_HPV_PreviewByDefault, ref previewByDefault);
             ApplyIniBool(changedValues, KEY_HPV_ShowPreviewDiff, ref showPreviewDiff);
+            ApplyIniBool(changedValues, KEY_SCR_CheckForUpdates, ref checkForUpdates);
             ApplyIniBool(changedValues, KEY_SCR_ReassertDriftedFields, ref reassertDriftedFields);
-            ApplyIniBool(changedValues, KEY_EXP_LiveSubHandlingData, ref liveSubHandlingData);
             if (changedValues.TryGetValue(KEY_DBG_LoggingMode, out s))
             {
                 if (int.TryParse(s, out n) && n >= LOGGING_MODE_MIN && n <= LOGGING_MODE_MAX) loggingMode = n;
@@ -414,7 +438,7 @@ namespace RHE
                 ApplyValues(changedValues);
                 if (keyToggleMenu == Keys.None && string.IsNullOrEmpty(enableCheatString)) RejectEmptyMenuEntryPoints(lastGoodValues);
                 RestoreRejectedValues(lastGoodValues);
-                File.WriteAllText(iniPath, BuildIniEntries());
+                WriteFileReplacing(iniPath, BuildIniEntries());
                 ReadIni();
                 iniLastGoodAvailable = true;
                 logger.Log(Dbg.Level.Info, Dbg.IniRegenerated(changedValues.Count));
@@ -465,7 +489,7 @@ namespace RHE
         // Writes the INI from the current in-memory values, which RunSettingsReset sets to the compiled defaults first
         private void ResetScalarDefaults()
         {
-            try { File.WriteAllText(iniPath, BuildIniEntries()); }
+            try { WriteFileReplacing(iniPath, BuildIniEntries()); }
             catch (Exception ex) { logger.Log(Dbg.Level.Error, Dbg.ResetScalarDefaultsFailed(ex.Message)); }
         }
 

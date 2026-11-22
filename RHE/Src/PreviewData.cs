@@ -128,6 +128,25 @@ namespace RHE
         // and never gated on a matching saved handling name
         private Dictionary<HandlingKey, XDocument> previewDiffSnapshots = new Dictionary<HandlingKey, XDocument>();
 
+        // A baseline's rows, parsed on its first Diff view and reused by every later refresh that shows it
+        // A captured baseline document is never replaced or edited, so keying by the document itself means a parse can never go stale
+        private class PreviewDiffBaselineParse
+        {
+            public List<PreviewField> Fields;
+            public List<List<PreviewField>> WeaponSlots;
+        }
+
+        private readonly Dictionary<XDocument, PreviewDiffBaselineParse> previewDiffBaselineParses = new Dictionary<XDocument, PreviewDiffBaselineParse>();
+
+        private PreviewDiffBaselineParse GetPreviewDiffBaselineParse(XDocument baseline)
+        {
+            PreviewDiffBaselineParse parse;
+            if (previewDiffBaselineParses.TryGetValue(baseline, out parse)) return parse;
+            parse = new PreviewDiffBaselineParse { Fields = BuildFullFieldListFromDocument(baseline), WeaponSlots = BuildWeaponPreviewSlotsFromDocument(baseline) };
+            previewDiffBaselineParses[baseline] = parse;
+            return parse;
+        }
+
         private static string ReadHandlingNameFromDocument(XDocument doc)
         {
             XElement handlingDataElement = doc.Root.Element(HANDLING_DATA_TAG);

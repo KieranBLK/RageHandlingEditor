@@ -37,6 +37,15 @@ namespace RHE
             Canceled = 8
         }
 
+        // The plugin's live SubHandlingData setup state. The numbers are the plugin's own, read across its export by value, so a member is never renumbered
+        // Pending lasts until the plugin's first script pass, and Unavailable is final
+        private enum LivePluginSetupState
+        {
+            Pending = 0,
+            Ready = 1,
+            Unavailable = 2
+        }
+
         // The category numbers the plugin's exports take. The numbers are the plugin's own
         // A member is never renumbered or reordered, since the plugin reads the number by value
         private enum PluginCategory

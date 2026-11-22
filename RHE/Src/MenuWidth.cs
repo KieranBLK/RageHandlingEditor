@@ -14,11 +14,11 @@ namespace RHE
         private Dictionary<NativeMenu, float> targetMenuWidths = new Dictionary<NativeMenu, float>();
         private Dictionary<NativeMenu, float> currentMenuWidths = new Dictionary<NativeMenu, float>();
         private HashSet<NativeItem> stringCyclerItems = new HashSet<NativeItem>();
-        // Per-item measurement cache that skips the native text-measurement call when an item's text hasn't changed since the last recalculation
-        // Bounded by the fixed set of NativeItems this script ever constructs, since every item is built once and reused, never recreated
-        private struct MeasuredText { public string Text; public float Width; }
-        private Dictionary<NativeItem, MeasuredText> measuredTitles = new Dictionary<NativeItem, MeasuredText>();
-        private Dictionary<NativeItem, MeasuredText> measuredValues = new Dictionary<NativeItem, MeasuredText>();
+        // Text widths keyed by the text itself, one cache per measuring text style, so a text measured once is never measured again on any row
+        // Preview's pooled rows show new value texts on nearly every scroll, which a cache keyed by row could never reuse
+        // Never pruned, since an entry is one short string and its width
+        private Dictionary<string, float> titleWidthsByText = new Dictionary<string, float>();
+        private Dictionary<string, float> valueWidthsByText = new Dictionary<string, float>();
         // Menus needing a width recalculation, drained once per tick against that tick's freshly-resolved HandlingData
         // A menu marked dirty while it isn't the visible menu stays queued until it becomes visible, so no menu is ever shown with a stale width
         private HashSet<NativeMenu> dirtyWidthMenus = new HashSet<NativeMenu>();
@@ -64,7 +64,7 @@ namespace RHE
         // One row's width, its title plus its value padding. Its text measurements fill the caches, so a late tree's warm-up measures one row per step
         private float MeasureRowWidth(NativeItem item, HandlingData handling)
         {
-            float titleWidth = MeasureCached(item, item.Title, measuredTitles, widthMeasure);
+            float titleWidth = MeasureCached(item.Title, titleWidthsByText, widthMeasure);
             float padding;
             if (item is NativeSlidableItem)
             {
@@ -73,7 +73,7 @@ namespace RHE
                 string cyclerValueText = ResolveCyclerValueText(item);
                 if (cyclerValueText != null)
                 {
-                    float valueWidth = MeasureCached(item, cyclerValueText, measuredValues, valueMeasure) + WIDTH_ITEM_PADDING + WIDTH_PREVIEW_VALUE_GAP;
+                    float valueWidth = MeasureCached(cyclerValueText, valueWidthsByText, valueMeasure) + WIDTH_ITEM_PADDING + WIDTH_PREVIEW_VALUE_GAP;
                     if (valueWidth > padding) padding = valueWidth;
                 }
             }
@@ -107,15 +107,15 @@ namespace RHE
             return width;
         }
 
-        // The underlying text-width read has no caching of its own, and most items' text is unchanged between recalculations
-        // Reusing a measurement for unchanged text is what keeps a bulk width recalculation cheap
-        private float MeasureCached(NativeItem item, string text, Dictionary<NativeItem, MeasuredText> cache, ScaledText measure)
+        // The underlying text-width read is several native calls with no caching of its own
+        // cache must belong to measure, since the same text has a different width in each text style
+        private float MeasureCached(string text, Dictionary<string, float> cache, ScaledText measure)
         {
-            MeasuredText cached;
-            if (cache.TryGetValue(item, out cached) && cached.Text == text) return cached.Width;
+            float width;
+            if (cache.TryGetValue(text, out width)) return width;
             measure.Text = text;
-            float width = measure.Width;
-            cache[item] = new MeasuredText { Text = text, Width = width };
+            width = measure.Width;
+            cache[text] = width;
             return width;
         }
 
@@ -149,12 +149,12 @@ namespace RHE
             for (int i = 0; i < menu.Items.Count; i++)
             {
                 NativeItem item = menu.Items[i];
-                float titleWidth = MeasureCached(item, item.Title, measuredTitles, widthMeasure);
+                float titleWidth = MeasureCached(item.Title, titleWidthsByText, widthMeasure);
                 float itemWidth;
                 if (item is NativeCheckboxItem) itemWidth = titleWidth + WIDTH_ITEM_PADDING;
                 else
                 {
-                    float valueWidth = MeasureCached(item, item.AltTitle, measuredValues, widthMeasure);
+                    float valueWidth = MeasureCached(item.AltTitle, titleWidthsByText, widthMeasure);
                     itemWidth = titleWidth + valueWidth + WIDTH_PREVIEW_VALUE_GAP;
                 }
                 if (itemWidth > longest) longest = itemWidth;

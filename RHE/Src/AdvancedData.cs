@@ -516,10 +516,12 @@ namespace RHE
                 var newEntry = new List<AdvancedDataEntry> { ParseAdvancedDataEntry(BuildDefaultAdvancedDataSlot()) };
                 if (count >= RawMemory.GetAdvancedDataCapacity(handling))
                 {
-                    if (!script.BeginAdvancedDataGrowth(context, vehicle, handling, count + 1, LiveRequestOrigin.Player, count, newEntry)) script.notifications.Notify(NOTIFICATION_KEY_LIVE_ADVANCEDDATA, string.Format(NOTIF_LIVE_ADVANCEDDATA_FAILED, REASON_LIVE_UNAVAILABLE));
+                    string growthRefusal;
+                    if (!script.BeginAdvancedDataGrowth(context, vehicle, handling, count + 1, LiveRequestOrigin.Player, count, newEntry, out growthRefusal)) script.notifications.Notify(NOTIFICATION_KEY_LIVE_ADVANCEDDATA, string.Format(NOTIF_LIVE_ADVANCEDDATA_FAILED, growthRefusal));
                     return;
                 }
-                if (!script.WriteAdvancedDataEntries(handling, count, newEntry))
+                int writtenFrom;
+                if (!script.WriteAdvancedDataEntries(handling, count, newEntry, out writtenFrom))
                 {
                     script.notifications.Notify(NOTIFICATION_KEY_LIVE_ADVANCEDDATA, string.Format(NOTIF_LIVE_ADVANCEDDATA_FAILED, REASON_VALUES_NOT_WRITTEN));
                     return;
@@ -702,7 +704,8 @@ namespace RHE
             HandlingKey handling = ResolveHandlingKey(vehicle);
             if (pendingAdvancedData.ContainsKey(handling) || HasPendingLiveRequest(handling)) return;
             var firstEntry = new List<AdvancedDataEntry> { ParseAdvancedDataEntry(BuildDefaultAdvancedDataSlot()) };
-            if (BeginAdvancedDataGrowth(context, vehicle, vehicle.HandlingData, 1, LiveRequestOrigin.Player, 0, firstEntry)) return;
+            string growthRefusal;
+            if (BeginAdvancedDataGrowth(context, vehicle, vehicle.HandlingData, 1, LiveRequestOrigin.Player, 0, firstEntry, out growthRefusal)) return;
             ResolveXmlAdvancedDataStore(AdvancedDataMenuKind.Pending).PressCreate(this, context);
         }
 

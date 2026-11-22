@@ -211,6 +211,16 @@ namespace RHE
                 if (autoRespawnMode == AutoRespawnMode.Off) ClearPendingAutoRespawn();
                 WriteDefaultIni();
             });
+            checkForUpdatesItem = new NativeCheckboxItem(TITLE_CHECK_FOR_UPDATES, CMT_SCR_CheckForUpdates, checkForUpdates);
+            settingsMenu.Add(checkForUpdatesItem);
+            // An INI edit and a reset reach this handler too, through SyncSettingsMenuItems
+            // So every way the setting turns on checks at once when this launch has no result yet
+            SubscribeCheckboxChanged(checkForUpdatesItem, "checkForUpdatesItem.CheckboxChanged", () =>
+            {
+                checkForUpdates = checkForUpdatesItem.Checked;
+                WriteDefaultIni();
+                if (checkForUpdates) updateChecker.Start();
+            });
             reassertDriftedFieldsItem = new NativeCheckboxItem(TITLE_REASSERT_DRIFTED_FIELDS, CMT_SCR_ReassertDriftedFields, reassertDriftedFields);
             settingsMenu.Add(reassertDriftedFieldsItem);
             SubscribeCheckboxChanged(reassertDriftedFieldsItem, "reassertDriftedFieldsItem.CheckboxChanged", () =>
@@ -373,17 +383,6 @@ namespace RHE
                 ApplyMenuPosition();
                 WriteDefaultIni();
             });
-            settingsExperimentalSep = new StyledSeparator(TITLE_SECTION_EXPERIMENTAL, GTA.UI.Font.HouseScript, SEPARATOR_SCALE);
-            settingsMenu.Add(settingsExperimentalSep);
-            liveSubHandlingDataItem = new NativeCheckboxItem(TITLE_EXP_LIVE_SUBHANDLINGDATA, CMT_EXP_LiveSubHandlingData, liveSubHandlingData);
-            liveSubHandlingDataItem.Enabled = IsLivePluginAvailable();
-            DimCheckboxWhileDisabled(liveSubHandlingDataItem);
-            settingsMenu.Add(liveSubHandlingDataItem);
-            SubscribeCheckboxChanged(liveSubHandlingDataItem, "liveSubHandlingDataItem.CheckboxChanged", () =>
-            {
-                liveSubHandlingData = liveSubHandlingDataItem.Checked;
-                WriteDefaultIni();
-            });
             settingsDebugSep = new StyledSeparator(TITLE_SECTION_DEBUG, GTA.UI.Font.HouseScript, SEPARATOR_SCALE);
             settingsMenu.Add(settingsDebugSep);
             loggingModeItem = new NativeListItem<string>(TITLE_LOGGING_VERBOSITY, DESC_LOGGING_VERBOSITY, LogModeLabels);
@@ -411,12 +410,11 @@ namespace RHE
             resettableRowKeys = new Dictionary<NativeItem, string>
             {
                 { menuActionModifierItem, KEY_CTL_MenuActionModifier }, { enableCheatStringItem, KEY_CTL_EnableCheatString },
-                { autoRespawnItem, KEY_SCR_AutoRespawn }, { reassertDriftedFieldsItem, KEY_SCR_ReassertDriftedFields },
+                { autoRespawnItem, KEY_SCR_AutoRespawn }, { checkForUpdatesItem, KEY_SCR_CheckForUpdates }, { reassertDriftedFieldsItem, KEY_SCR_ReassertDriftedFields },
                 { alwaysOverwriteItem, KEY_EXG_AlwaysOverwrite }, { promptOnSaveItem, KEY_EXG_PromptOnSave }, { autosaveItem, KEY_EXG_Autosave },
                 { previewByDefaultItem, KEY_HPV_PreviewByDefault }, { showPreviewDiffItem, KEY_HPV_ShowPreviewDiff },
                 { isolatedDrawingItem, KEY_VIS_IsolatedDrawing },
                 { bannerColorItem, KEY_APR_BannerColorRGB }, { menuAlignItem, KEY_APR_MenuPosition }, { maxRowsItem, KEY_APR_MaxRows },
-                { liveSubHandlingDataItem, KEY_EXP_LiveSubHandlingData },
                 { loggingModeItem, KEY_DBG_LoggingMode }, { alwaysClearLogItem, KEY_DBG_AlwaysClearLogOnReload }
             };
         }
@@ -495,17 +493,13 @@ namespace RHE
             if (previewByDefaultItem != null) previewByDefaultItem.Checked = previewByDefault;
             if (showPreviewDiffItem != null) showPreviewDiffItem.Checked = showPreviewDiff;
             if (isolatedDrawingItem != null) isolatedDrawingItem.Checked = isolatedDrawing;
+            if (checkForUpdatesItem != null) checkForUpdatesItem.Checked = checkForUpdates;
             if (reassertDriftedFieldsItem != null) reassertDriftedFieldsItem.Checked = reassertDriftedFields;
             if (autoRespawnItem != null) autoRespawnItem.SelectedItem = autoRespawnMode.ToString();
             if (resetAllSettingsItem != null) resetAllSettingsItem.Checked = resetAllSettings;
             if (bannerColorItem != null) bannerColorItem.SelectedIndex = ResolveBannerPresetIndex();
             if (menuAlignItem != null) menuAlignItem.SelectedItem = menuAlignLeft ? LABEL_POSITION_LEFT : LABEL_POSITION_RIGHT;
             if (maxRowsItem != null) maxRowsItem.SelectedIndex = menuMaxRows - MENU_MAX_ROWS_MIN;
-            if (liveSubHandlingDataItem != null)
-            {
-                liveSubHandlingDataItem.Checked = liveSubHandlingData;
-                liveSubHandlingDataItem.Enabled = IsLivePluginAvailable();
-            }
             SyncSettingsWarningColors();
         }
 

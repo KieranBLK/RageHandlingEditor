@@ -85,12 +85,13 @@ namespace RHE
         private static string SavedHandlingPath(SavedHandlingKey key) { return key.Source.Folder + key.Name + ".meta"; }
         private SavedHandlingKey ExportKey(string name) { return new SavedHandlingKey(exportsSource, name); }
 
+        // Only a file the operation removed itself needs this, since a failed WriteVerifiedHandling leaves the file at its path untouched
         // A restore failure is logged, not retried, since the caller has already reported the original operation as failed
         private void RestoreHandlingBackup(string path, string content)
         {
             try
             {
-                File.WriteAllText(path, content);
+                WriteFileReplacing(path, content);
                 logger.Log(Dbg.Level.Warn, Dbg.HandlingRestoredAfterFailedWrite(path));
             }
             catch (Exception ex) { logger.Log(Dbg.Level.Error, Dbg.HandlingRestoreFailed(path, ex.Message)); }
@@ -228,6 +229,7 @@ namespace RHE
             }
             string backupPath = null;
             string backupContent = null;
+            bool restoreBackupOnFailure = false;
             try
             {
                 if (!Directory.Exists(EXPORTS_DIR)) Directory.CreateDirectory(EXPORTS_DIR);
@@ -247,17 +249,23 @@ namespace RHE
                     }
                     // Windows matches an existing file case-insensitively but preserves its original directory-entry casing on overwrite
                     // Deleting the old entry first lets the new write land under outName's own correct casing instead of retaining the old one
-                    if (backupPath != outPath) File.Delete(backupPath);
+                    if (backupPath != outPath)
+                    {
+                        File.Delete(backupPath);
+                        restoreBackupOnFailure = true;
+                    }
                 }
                 XDocument doc = handlingMetaXml.BuildHandlingXml(vehicle.HandlingData, handlingName, ResolveHandlingFieldGates(vehicle), ResolveExportOverlay(ResolveHandlingKey(vehicle)));
                 MarkHandlingNameMismatch(doc, "SaveHandling", handlingName, vehicle);
                 string content = doc.Declaration.ToString() + Environment.NewLine + Environment.NewLine + doc.Root.ToString();
                 if (!WriteVerifiedHandling(outPath, content))
                 {
-                    if (backupPath != null) RestoreHandlingBackup(backupPath, backupContent);
+                    if (restoreBackupOnFailure) RestoreHandlingBackup(backupPath, backupContent);
                     logger.Log(Dbg.Level.Error, Dbg.HandlingVerifyFailed(outName));
                     return;
                 }
+                // The new file now sits under the old entry's name, so a later throw must not write the backup over it
+                restoreBackupOnFailure = false;
                 logger.Log(Dbg.Level.Info, Dbg.HandlingSaved(outName));
                 notifications.Notify(NOTIFICATION_KEY_HANDLING_SAVE, overwroteExisting ? string.Format(NOTIF_HANDLING_OVERWROTE, outName) : string.Format(NOTIF_HANDLING_SAVED, outName));
                 RunHandlingPostOperationRefresh(outName, () =>
@@ -268,7 +276,7 @@ namespace RHE
             }
             catch (Exception ex)
             {
-                if (backupPath != null) RestoreHandlingBackup(backupPath, backupContent);
+                if (restoreBackupOnFailure) RestoreHandlingBackup(backupPath, backupContent);
                 logger.Log(Dbg.Level.Error, Dbg.HandlingSaveError(fileName, ex.Message));
             }
         }
@@ -362,7 +370,6 @@ namespace RHE
                 return;
             }
             string path = SavedHandlingPath(key);
-            // Captured before the write, so a failed verify below restores exactly what existed rather than leaving the slot empty
             string backupContent;
             try { backupContent = File.Exists(path) ? File.ReadAllText(path) : null; }
             catch (Exception ex)
@@ -395,7 +402,6 @@ namespace RHE
                 string content = doc.Declaration.ToString() + Environment.NewLine + Environment.NewLine + doc.Root.ToString();
                 if (!WriteVerifiedHandling(path, content))
                 {
-                    if (backupContent != null) RestoreHandlingBackup(path, backupContent);
                     logger.Log(Dbg.Level.Error, Dbg.HandlingVerifyFailed(name));
                     StartResultFlash(item, Color.Red);
                     return;
@@ -490,26 +496,26 @@ namespace RHE
             catch (Exception ex) { logger.Log(Dbg.Level.Warn, Dbg.HandlingPostRefreshFailed(savedHandlingName, ex.Message)); }
         }
 
-        // Writes directly to the final path, and a file that fails validation is removed before reporting failure
+        // The copy is checked before it replaces the file, so a failed write or check never touches a file already at the path
         private bool WriteVerifiedHandling(string path, string content)
         {
-            bool writeCompleted = false;
-            bool verified = false;
+            string copyPath = null;
+            bool committed = false;
             try
             {
-                File.WriteAllText(path, content);
-                writeCompleted = true;
-                XDocument written = XDocument.Load(path);
+                copyPath = WriteReplacingCopy(path, content);
+                XDocument written = XDocument.Load(copyPath);
                 if (written.Root == null || written.Root.Element(HANDLING_DATA_TAG) == null) return false;
-                verified = true;
+                CommitReplacingWrite(copyPath, path);
+                committed = true;
                 return true;
             }
             catch (Exception ex) { logger.Log(Dbg.Level.Warn, Dbg.HandlingVerifyError(ex.Message)); }
             finally
             {
-                if (writeCompleted && !verified)
+                if (copyPath != null && !committed)
                 {
-                    try { if (File.Exists(path)) File.Delete(path); }
+                    try { if (File.Exists(copyPath)) File.Delete(copyPath); }
                     catch (Exception ex) { logger.Log(Dbg.Level.Warn, Dbg.HandlingUnverifiedFileRemovalFailed(ex.Message)); }
                 }
             }

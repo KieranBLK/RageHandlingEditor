@@ -178,7 +178,11 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID)
     {
         DisableThreadLibraryCalls(module);
         OpenLog();
-        if (!PinPluginModule(module)) return TRUE;
+        if (!PinPluginModule(module))
+        {
+            AbandonSubHandling();
+            return TRUE;
+        }
         hookInstalled = InstallModelCaptureHook();
         bool buildVerified = IsBuildVerified();
         if (!buildVerified) LogWarn(Dbg::BuildNotVerified(GetGameFileVersion()));

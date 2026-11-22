@@ -62,7 +62,7 @@ namespace RHE
         {
             FrameStamp, StartupNotifications, SeatWeaponReenable, SavedHandlingsParentRestore, ResultFlash, MenuProcessing, WidthRecalc, RawMemoryWarnings, LogFlush, IniWatch, NotificationSweep, ModelUnloadPoll, LiveSubDataPoll, PlayerResolve, MenuState,
             MultipleMenusDiag, CheatString, SeatTracking, VehicleResolve, DeletedTargetBackOut, FieldSync, MenuRestore, SeatMerge, WidthAnimation, HintSync, HotkeySuppression, GlobalHotkeyPoll, PreviewReposition, SelectiveCopyFlagPoll, SavedHandlingFileCheck, HandlingDeleteFinish,
-            ArmedFlash, ModelMetaDataRetry, Autosave, KeyCapturePoll, HandlingResolve, HandlingVisualization, DriftReassertion, AdditionalEditorTracking, WidthDirtyDrain, NavHoldAcceleration, AutoRespawn, VehicleSelectionHover,
+            UpdateCheckFinish, ArmedFlash, ModelMetaDataRetry, Autosave, KeyCapturePoll, HandlingResolve, HandlingVisualization, DriftReassertion, AdditionalEditorTracking, WidthDirtyDrain, NavHoldAcceleration, AutoRespawn, VehicleSelectionHover,
             GlobalHotkeys, ArmedActionBackspace, WeaponSlotReorder, PhantomWeaponSlotReorder, PreviewFocusSwitch,
             StartupWarmUp, RespawnMotionReapply
         }
@@ -203,6 +203,7 @@ namespace RHE
             // An INI change counts too, since the Autosaves row follows the Autosave setting
             stages.Add(new TickStage(Subsystem.SavedHandlingFileCheck, CheckSavedHandlingFileExists, () => savedHandlingsMenu != null && savedHandlingsMenu.Visible && (savedHandlingsChangedThisTick || iniChangedThisTick)));
             stages.Add(new TickStage(Subsystem.HandlingDeleteFinish, FinishHandlingDelete, () => pendingHandlingDelete != null && pendingHandlingDelete.Removal.IsCompleted));
+            stages.Add(new TickStage(Subsystem.UpdateCheckFinish, updateChecker.Finish, updateChecker.IsFinished));
             stages.Add(new TickStage(Subsystem.ArmedFlash, UpdateArmedFlash, () => armedItem != null));
             // Loads the ModelMetaData file once it appears, when it was missing at the first name lookup
             stages.Add(new TickStage(Subsystem.ModelMetaDataRetry, () => { if (modelNames.RetryMissingModelMetaData()) DropVehicleModelNameIndex(); }, () => modelNames.IsModelMetaDataMissing() && modelMetaDataChangedThisTick));

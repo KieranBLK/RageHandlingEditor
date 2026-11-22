@@ -170,7 +170,7 @@ namespace RHE
                 if (Entity.IsNullOrNotExisting(vehicle)) return;
                 HandlingData handling = vehicle.HandlingData;
                 if (!handling.IsValid) return;
-                if (IsCategoryPresent(handling, category)) ToggleSubDataExclusion(owner, category, false);
+                if (IsCategoryPresent(handling, category)) ToggleSubDataExclusion(owner, category, null);
                 else if (!BeginLiveCategoryCreation(owner, category, vehicle, LiveRequestOrigin.Player)) ActivatePhantomCategory(owner, category);
             });
             row.Placeholder = placeholder;

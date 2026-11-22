@@ -62,12 +62,43 @@ namespace RHE
                     else if (message.StartsWith("~y~", StringComparison.Ordinal)) displayMs = NOTIF_DISPLAY_WARN_MS;
                     else displayMs = NOTIF_DISPLAY_MS;
                 }
-                if (message.Length > NOTIF_MAX_CHARS) message = message.Substring(0, NOTIF_MAX_CHARS - NOTIF_ELLIPSIS_LEN) + "...";
-                Function.Call(Hash.BEGIN_TEXT_COMMAND_THEFEED_POST, "STRING");
-                Function.Call(Hash.ADD_TEXT_COMPONENT_SUBSTRING_PLAYER_NAME, message);
+                Function.Call(Hash.BEGIN_TEXT_COMMAND_THEFEED_POST, NOTIF_FEED_LABEL);
+                List<string> pieces = SplitIntoFeedPieces(message);
+                for (int i = 0; i < pieces.Count; i++) Function.Call(Hash.ADD_TEXT_COMPONENT_SUBSTRING_PLAYER_NAME, pieces[i]);
                 int id = Function.Call<int>(Hash.END_TEXT_COMMAND_THEFEED_POST_TICKER, false, false);
                 if (displayMs > 0) notifExpirations.Add(new KeyValuePair<int, int>(id, Game.GameTime + displayMs));
                 return id;
+            }
+
+            // A piece never ends inside a ~x~ color token or a surrogate pair
+            // Text past the last piece is dropped, which only a message far longer than any toast reaches
+            private static List<string> SplitIntoFeedPieces(string message)
+            {
+                var pieces = new List<string>();
+                int start = 0;
+                while (start < message.Length && pieces.Count < NOTIF_MAX_PIECES)
+                {
+                    int end = start;
+                    int bytes = 0;
+                    while (end < message.Length)
+                    {
+                        int width = char.IsHighSurrogate(message[end]) && end + 1 < message.Length ? 2 : 1;
+                        int size = width == 2 ? 4 : message[end] < 0x80 ? 1 : message[end] < 0x800 ? 2 : 3;
+                        if (bytes + size > NOTIF_PIECE_MAX_BYTES) break;
+                        bytes += size;
+                        end += width;
+                    }
+                    if (end < message.Length)
+                    {
+                        int tildes = 0;
+                        for (int i = start; i < end; i++) if (message[i] == '~') tildes++;
+                        int lastTilde = message.LastIndexOf('~', end - 1, end - start);
+                        if (tildes % 2 != 0 && lastTilde > start) end = lastTilde;
+                    }
+                    pieces.Add(message.Substring(start, end - start));
+                    start = end;
+                }
+                return pieces;
             }
 
             // Replaces in place: Removes whatever notification is tracked under key before posting the new one

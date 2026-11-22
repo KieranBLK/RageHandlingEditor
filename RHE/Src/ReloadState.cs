@@ -11,7 +11,7 @@ namespace RHE
     public partial class RageHandlingEditor : Script
     {
         // The kinds of state a script reload carries, in the order the file lists them and the constructor loads them. The names are written to the file
-        private enum ReloadStateSection { UndoHistory, PhantomSubData, PreviewDiffSnapshot, SelectedSlots, MenuRestore }
+        private enum ReloadStateSection { UndoHistory, PhantomSubData, PreviewDiffSnapshot, SelectedSlots, MenuRestore, UpdateCheck }
 
         private readonly IReloadStateFile reloadState;
 
@@ -31,7 +31,8 @@ namespace RHE
                 ReloadStateFile.BuildReloadStateProvider(ReloadStateSection.PhantomSubData, WritePhantomSubDataHistory, ConsumePhantomSubDataLine),
                 ReloadStateFile.BuildReloadStateProvider(ReloadStateSection.PreviewDiffSnapshot, WritePreviewDiffSnapshot, ConsumePreviewDiffSnapshotLine),
                 ReloadStateFile.BuildReloadStateProvider(ReloadStateSection.SelectedSlots, WriteSelectedSlots, ConsumeSelectedSlotsLine),
-                ReloadStateFile.BuildReloadStateProvider(ReloadStateSection.MenuRestore, WriteMenuRestore, ConsumeMenuRestoreLine)
+                ReloadStateFile.BuildReloadStateProvider(ReloadStateSection.MenuRestore, WriteMenuRestore, ConsumeMenuRestoreLine),
+                ReloadStateFile.BuildReloadStateProvider(ReloadStateSection.UpdateCheck, updateChecker.WriteReloadStateLines, updateChecker.ConsumeReloadStateLine)
             };
         }
 
@@ -130,7 +131,7 @@ namespace RHE
                 }
                 string directory = Path.GetDirectoryName(RELOAD_STATE_PATH);
                 if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                File.WriteAllText(RELOAD_STATE_PATH, document.ToString());
+                WriteFileReplacing(RELOAD_STATE_PATH, document.ToString());
                 logger.Log(Dbg.Level.Info, Dbg.ReloadStateWritten(written.ToString()));
             }
 

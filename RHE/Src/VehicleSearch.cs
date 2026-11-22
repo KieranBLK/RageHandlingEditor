@@ -19,8 +19,6 @@ namespace RHE
         private readonly List<NativeItem> searchResultRowPool = new List<NativeItem>();
         // Whether the pooled rows currently read dimmed, kept so a refresh retints the pool only when the Active vehicle came or went
         private bool searchRowsDimmed;
-        // A result row's title width by its text, since every width read is a native text measurement and the same names return on every list
-        private readonly Dictionary<string, float> searchTitleWidths = new Dictionary<string, float>();
         // Preview's parse of each result, built from the model's live handling, and cleared on every Preview refresh while searching so values are never stale
         private readonly Dictionary<SavedHandlingKey, HandlingPreviewCache> searchPreviewCache = new Dictionary<SavedHandlingKey, HandlingPreviewCache>();
         // Every searchable model name, upper-cased, with its model hash, in name order, and built on first use
@@ -290,14 +288,7 @@ namespace RHE
             float longest = newSearchRowItem != null ? MeasureRowWidth(newSearchRowItem, null) : 0.0f;
             for (int i = 0; i < searchResultKeys.Length; i++)
             {
-                string name = searchResultKeys[i].Name;
-                float titleWidth;
-                if (!searchTitleWidths.TryGetValue(name, out titleWidth))
-                {
-                    widthMeasure.Text = name;
-                    titleWidth = widthMeasure.Width;
-                    searchTitleWidths[name] = titleWidth;
-                }
+                float titleWidth = MeasureCached(searchResultKeys[i].Name, titleWidthsByText, widthMeasure);
                 if (titleWidth + WIDTH_ITEM_PADDING > longest) longest = titleWidth + WIDTH_ITEM_PADDING;
             }
             return longest;

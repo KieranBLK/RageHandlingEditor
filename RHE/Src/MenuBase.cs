@@ -133,9 +133,7 @@ namespace RHE
         private StyledSeparator settingsHandlingPreviewSep;
         private StyledSeparator settingsVisualizationSep;
         private StyledSeparator settingsAppearanceSep;
-        private StyledSeparator settingsExperimentalSep;
         private StyledSeparator settingsDebugSep;
-        private NativeCheckboxItem liveSubHandlingDataItem;
         private static readonly string[] LogModeLabels = { LABEL_LOGGING_WARN_ERROR, LABEL_LOGGING_ALL, LABEL_LOGGING_DEFAULT_PERF, LABEL_LOGGING_DEFAULT_INFO };
         // Named banner color presets. Rows 0-5 of BannerColorPresetRgb match indices 0-5
         // Custom (BANNER_COLOR_CUSTOM_INDEX) is user-defined with no corresponding row
@@ -150,6 +148,7 @@ namespace RHE
         private NativeCheckboxItem previewByDefaultItem;
         private NativeCheckboxItem showPreviewDiffItem;
         private NativeCheckboxItem isolatedDrawingItem;
+        private NativeCheckboxItem checkForUpdatesItem;
         private NativeCheckboxItem reassertDriftedFieldsItem;
         private static readonly string[] AIHandlingNames = { "AVERAGE", "SPORTS_CAR", "TRUCK", "CRAP" };
         // Each name's hash, computed once, since the editor compares them on every sync

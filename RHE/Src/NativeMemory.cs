@@ -278,15 +278,16 @@ namespace RHE
             public const int WingDeployedRatio = 0x344;
         }
 
-        // The model info's buoyancy info pointer, found in game, and the indexes of 2 flags in its vehicles.meta flag bitset
+        // The model info's buoyancy info pointer, found in game, and the indexes of 3 flags in its vehicles.meta flag bitset
         // The bitset's word size in flags and in bytes
         private static class ModelInfoLayout
         {
-            public const int BuoyancyInfo                  = 0x78;
-            public const int FlagHasRearMountedTurretIndex = 111;
-            public const int FlagHasGliderIndex            = 137;
-            public const int FlagsPerWord                  = 32;
-            public const int FlagWordBytes                 = 4;
+            public const int BuoyancyInfo                   = 0x78;
+            public const int FlagHasRearMountedTurretIndex  = 111;
+            public const int FlagHasGliderIndex             = 137;
+            public const int FlagHasVerticalFlightModeIndex = 154;
+            public const int FlagsPerWord                   = 32;
+            public const int FlagWordBytes                  = 4;
         }
 
         // The buoyancy info's water sample array pointer and sample count
@@ -382,6 +383,8 @@ namespace RHE
             private static readonly Dictionary<int, bool> rearMountedTurretByModel = new Dictionary<int, bool>();
             // FLAG_HAS_GLIDER per model hash, read once per model
             private static readonly Dictionary<int, bool> gliderByModel = new Dictionary<int, bool>();
+            // FLAG_HAS_VERTICAL_FLIGHT_MODE per model hash, read once per model
+            private static readonly Dictionary<int, bool> verticalFlightModeFlagByModel = new Dictionary<int, bool>();
             // Each distinct failure signature (offset/address plus reason) gets its own one-time warning, rather than one global latch silencing a second failure
             private static List<string> rawMemoryAccessWarningPending = new List<string>();
             private static HashSet<string> rawMemoryAccessWarningLogged = new HashSet<string>();
@@ -398,13 +401,14 @@ namespace RHE
             }
 
             // A prior load's warning dedupe would silence a genuine repeat failure in the new session's log
-            // The rear-mounted turret and glider caches also start empty with each load
+            // The model flag caches also start empty with each load
             public static void ResetForScriptLoad()
             {
                 rawMemoryAccessWarningPending.Clear();
                 rawMemoryAccessWarningLogged.Clear();
                 rearMountedTurretByModel.Clear();
                 gliderByModel.Clear();
+                verticalFlightModeFlagByModel.Clear();
             }
 
             // Hands over every warning queued since the last call and marks each one logged, so the same failure is never queued again
@@ -570,6 +574,19 @@ namespace RHE
                 bool isSet;
                 if (!ReadModelFlag(vehicle, ModelInfoLayout.FlagHasGliderIndex, out isSet)) return false;
                 gliderByModel[modelHash] = isSet;
+                return isSet;
+            }
+
+            // True when no vehicle is given or the flag cannot be read, so nothing is hidden on a guess
+            public static bool HasVerticalFlightModeFlag(Vehicle vehicle)
+            {
+                if (Entity.IsNullOrNotExisting(vehicle)) return true;
+                int modelHash = vehicle.Model.Hash;
+                bool cached;
+                if (verticalFlightModeFlagByModel.TryGetValue(modelHash, out cached)) return cached;
+                bool isSet;
+                if (!ReadModelFlag(vehicle, ModelInfoLayout.FlagHasVerticalFlightModeIndex, out isSet)) return true;
+                verticalFlightModeFlagByModel[modelHash] = isSet;
                 return isSet;
             }
 

@@ -62,6 +62,8 @@ namespace RHE
             public HashSet<int> RequiredModelHashes;
             // The vehicle types phantom and live creation is allowed on, or null for any type
             public VehicleType[] CandidateTypes;
+            // A test a candidate type's vehicle must also pass, or null for none
+            public Func<Vehicle, bool> CandidateCheck;
             // Candidate types the category is created and deleted on only as phantom, never live, or null for none
             public VehicleType[] PhantomOnlyTypes;
             // An off-road car is offered the category too, for an off-road car made amphibious
@@ -165,7 +167,9 @@ namespace RHE
                     XmlType = "CFlyingHandlingData",
                     IsVerticalFlying = true,
                     PluginCategory = PluginCategory.VerticalFlying,
-                    CandidateTypes = new[] { VehicleType.Plane, VehicleType.Helicopter, VehicleType.Blimp },
+                    // Only the plane flight model reads it, and only on a plane with vertical flight mode
+                    CandidateTypes = new[] { VehicleType.Plane },
+                    CandidateCheck = HasVerticalFlightMode,
                     CreationEffect = CreationEffect.Live
                 },
                 new CategoryDefinition<SpecialFlightHandlingData>(SpecialFlightFields, h => h.SpecialFlightHandlingData, BuildDefaultSpecialFlightHandlingXml)
@@ -253,6 +257,16 @@ namespace RHE
             CategoryDefinition[] definitions = CategoryDefinitions;
             for (int i = 0; i < definitions.Length; i++) if (definitions[i].Matches(sub)) return definitions[i];
             return null;
+        }
+
+        // The game's own test for a plane's vertical flight mode, as the retail executable runs it
+        // The Titan 2 never has the mode, and any other plane has it with the model flag, the front nozzle bone, or as the Tula or the Raiju
+        private static bool HasVerticalFlightMode(Vehicle vehicle)
+        {
+            uint modelHash = (uint)vehicle.Model.Hash;
+            if (modelHash == StringHash.AtStringHashUtf8(VERTICAL_FLIGHT_EXCLUDED_MODEL_NAME)) return false;
+            if (modelHash == StringHash.AtStringHashUtf8(VERTICAL_FLIGHT_TULA_MODEL_NAME) || modelHash == StringHash.AtStringHashUtf8(VERTICAL_FLIGHT_RAIJU_MODEL_NAME)) return true;
+            return RawMemory.HasVerticalFlightModeFlag(vehicle) || vehicle.Bones.Contains(VERTICAL_FLIGHT_NOZZLE_BONE_NAME);
         }
 
         // A plain loop, since Array.IndexOf over an enum array goes through a boxing comparer on .NET Framework 4.8

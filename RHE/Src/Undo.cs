@@ -85,6 +85,8 @@ namespace RHE
             // True when Apply only queues the work and the outcome arrives on a later frame
             // Undo and Redo then post no done toast, since the outcome's own toast is the feedback
             public virtual bool FinishesLater { get { return false; } }
+            // True when the apply that just returned False was refused for a reason the player can clear, so the entry stays on its own stack for the next press
+            public virtual bool StaysOnStackWhenRefused { get { return false; } }
             // vehicle and handling are the live ones the replay resolved, which only the families that mutate the vehicle itself read. reason is set on every False return
             public abstract bool Apply(RageHandlingEditor script, bool redo, Vehicle vehicle, HandlingData handling, ref ReplayFlags replayFlags, out string reason);
             public abstract void WritePayload(StringBuilder sb);
@@ -499,11 +501,14 @@ namespace RHE
             public static readonly string[] Kinds = { StructuralKind.LiveCategoryCreate, StructuralKind.LiveCategoryDelete };
             public readonly string Category;
             public string EncodedBlock;
+            // Set by each apply and never saved: True only when it was refused for water or another vehicle on the handling, which moving or despawning clears
+            public bool RefusalRetryable;
             public LiveCategoryEdit(string kind, string category, string encodedBlock) : base(kind) { Category = category; EncodedBlock = encodedBlock; }
             public override string FocusKey { get { return null; } }
             public override string Label { get { return Kind + ":" + Category; } }
             public override string Description { get { return Kind + " (" + Category + ")"; } }
             public override bool FinishesLater { get { return true; } }
+            public override bool StaysOnStackWhenRefused { get { return RefusalRetryable; } }
             public override bool Apply(RageHandlingEditor script, bool redo, Vehicle vehicle, HandlingData handling, ref ReplayFlags replayFlags, out string reason) { return script.ApplyLiveCategoryEdit(this, redo, handling, out reason); }
             public override void WritePayload(StringBuilder sb) { AppendField(sb, Category); AppendField(sb, EncodedBlock); }
             public override void AddLifecycleFocusItems(EditorContext context, bool redo, List<NativeItem> items)
@@ -945,8 +950,9 @@ namespace RHE
             FocusFollowsLastMember = false
         };
 
-        // The entry leaves its stack before its apply and always lands on the other one, since an apply that throws would otherwise discard it from both
+        // The entry leaves its stack before its apply and lands on the other one, since an apply that throws would otherwise discard it from both
         // A throw is treated as a failed apply, so the entry stays recoverable
+        // The caller moves an entry back when its edit was refused for a reason the player can clear
         private UndoEntry ApplyTopEntry(List<UndoEntry> sourceStack, List<UndoEntry> targetStack, bool redo, Vehicle vehicle, HandlingData handling, ref ReplayFlags replayFlags, out bool applied, out string reason)
         {
             UndoEntry entry = sourceStack[sourceStack.Count - 1];
@@ -995,11 +1001,27 @@ namespace RHE
             string reason;
             bool applied;
             UndoEntry entry = ApplyTopEntry(sourceStack, targetStack, redo, vehicle, handling, ref replayFlags, out applied, out reason);
+            // A refusal the player can clear leaves the entry where it was, so the next press retries it instead of acting on an older entry
+            bool stayedOnStack = !applied && entry.Edit.StaysOnStackWhenRefused && targetStack.Count > 0 && ReferenceEquals(targetStack[targetStack.Count - 1], entry);
+            if (stayedOnStack)
+            {
+                targetStack.RemoveAt(targetStack.Count - 1);
+                sourceStack.Add(entry);
+            }
             // The rest of a grouped entry's group moves with it
             UndoEntry focusEntry = entry;
             bool groupMemberFailed = false;
-            while (entry.GroupId != 0 && sourceStack.Count > 0 && sourceStack[sourceStack.Count - 1].GroupId == entry.GroupId)
+            while (!stayedOnStack && entry.GroupId != 0 && sourceStack.Count > 0 && sourceStack[sourceStack.Count - 1].GroupId == entry.GroupId)
             {
+                // A member made obsolete since the group formed moves with it without applying, the way an obsolete entry at the top does
+                UndoEntry topMember = sourceStack[sourceStack.Count - 1];
+                if (IsObsoleteExportOnlyEntry(topMember, handling))
+                {
+                    sourceStack.RemoveAt(sourceStack.Count - 1);
+                    targetStack.Add(topMember);
+                    logger.Log(Dbg.Level.Info, Dbg.UndoEntrySkipped(DescribeUndoEntry(topMember), topMember.Edit.ExportOnlyCategory));
+                    continue;
+                }
                 string memberReason;
                 bool memberApplied;
                 UndoEntry member = ApplyTopEntry(sourceStack, targetStack, redo, vehicle, handling, ref replayFlags, out memberApplied, out memberReason);

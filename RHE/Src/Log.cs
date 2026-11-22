@@ -234,6 +234,14 @@ namespace RHE
             // --Notifications--
             public static string NotificationRemoveFailed(string message) { return "NOTIFICATION: THEFEED_REMOVE_ITEM | Failed | Error=" + message; }
             public static string FrozenPostClearFailed(string message) { return "NOTIFICATION: THEFEED_CLEAR_FROZEN_POST | Failed | Error=" + message; }
+            // --UpdateCheck--
+            public static string UpdateCheckStarted(string securityProtocol) { return "UPDATE: Release check | Started | SecurityProtocol=" + securityProtocol; }
+            public static string UpdateCheckSkipped(string reason) { return "UPDATE: Release check | Skipped | Reason=" + reason; }
+            public static string UpdateCheckFailed(string message) { return "UPDATE: Release check | Failed, no notification | Error=" + message; }
+            public static string UpdateTagUnparsed(string tag) { return "UPDATE: Release check | Tag is not a version, no notification | Tag=\"" + tag + "\""; }
+            public static string UpdateCurrent(string latest, string running) { return "UPDATE: Release check | Up to date | Latest=v" + latest + " | Running=v" + running; }
+            public static string UpdateAvailable(string latest, string running) { return "UPDATE: Release check | Newer release available, notified | Latest=v" + latest + " | Running=v" + running; }
+            public static string UpdateResultDropped() { return "UPDATE: Release check | Result dropped | CheckForUpdates turned off while it ran"; }
             // --Weapon--
             public static string WeaponSlotActionFailed(string action, string message) { return "WEAPONSLOT: " + action + " | Failed | Error=" + message; }
             // --Respawn--
@@ -284,6 +292,12 @@ namespace RHE
             public static string LiveAdvancedDataApplied(string displayName, int modelHash, int count) { return "LIVESUBDATA: " + FormatModelLabel(displayName, modelHash) + " | AdvancedData | Applied | Entries=" + count; }
             public static string LiveAdvancedDataFailed(string displayName, int modelHash, int capacity, string reason) { return "LIVESUBDATA: " + FormatModelLabel(displayName, modelHash) + " | AdvancedData | Not grown | Capacity=" + capacity + " | " + reason; }
             public static string LiveReplayEntryNotMoved(string description, string reason) { return "LIVESUBDATA: " + description + " | Failed replay stays where it is | A later edit buried it | " + reason; }
+            public static string LiveRequestFinishFailed(string displayName, int modelHash, string category, string exceptionType, string message) { return "LIVESUBDATA: " + FormatModelLabel(displayName, modelHash) + " | " + category + " | Finishing the request threw | " + exceptionType + " | " + message; }
+            public static string LiveSubDataDefaultsKept(string displayName, int modelHash, string category, string reason) { return "LIVESUBDATA: " + FormatModelLabel(displayName, modelHash) + " | " + category + " | Created with default values | " + reason; }
+            public static string LiveSubDataDeleteWaiting(string category) { return "LIVESUBDATA: " + category + " | Delete not started | A live request on this handling is still pending"; }
+            public static string LiveAdvancedDataSeedKept(string displayName, int modelHash, int entries) { return "LIVESUBDATA: " + FormatModelLabel(displayName, modelHash) + " | AdvancedData | Growth failed | Authored entries kept as pending export-only entries | Entries=" + entries; }
+            public static string LiveAdvancedDataSeedDropped(string displayName, int modelHash, int entries) { return "LIVESUBDATA: " + FormatModelLabel(displayName, modelHash) + " | AdvancedData | Growth failed | Authored entries dropped, a pending block already exists | Entries=" + entries; }
+            public static string LivePluginSetupUnavailable() { return "LIVESUBDATA: Plugin | Setup failed | Live creation unavailable"; }
             // --Menu--
             public static string MenuScrollWindowFieldMissing() { return "MENU: Scroll window | First-row field not found | Removal gap fix disabled"; }
             public static string MenuSelectedRectFieldMissing() { return "MENU: Highlight bar | The menu library's private highlight field is missing | Result flashes are disabled"; }
@@ -293,7 +307,6 @@ namespace RHE
             // --Warm Up--
             public static string PrecompileDone(int prepared, int skipped, int failed, double milliseconds, int ticks) { return "WARMUP: Precompile | Done | Prepared=" + prepared + " | Skipped=" + skipped + " | Failed=" + failed + " | Time=" + milliseconds.ToString("F0") + "ms | Ticks=" + ticks; }
             public static string PrecompileMethodFailed(string method, string exceptionType, string message) { return "WARMUP: Precompile | Method failed | Method=" + method + " | " + exceptionType + ": " + message + " | Later failures are only counted"; }
-            // --Perf--
             // --Teleport--
             public static string TeleportedToVehicle(string displayName, int modelHash, bool driverRemoved) { return "TELEPORT: " + FormatModelLabel(displayName, modelHash) + " | Done" + (driverRemoved ? " | Driver set out of the vehicle" : ""); }
             public static string DeletedVehicle(string displayName, int modelHash, int occupantsDeleted, bool onScreen) { return "DELETE: " + FormatModelLabel(displayName, modelHash) + " | Occupants=" + occupantsDeleted + " | " + (onScreen ? "OnScreen" : "OffScreen"); }
@@ -402,6 +415,7 @@ namespace RHE
             public static string PreviewPositionRestored(string menuName, int row) { return "PREVIEW: Position restored | " + menuName + " | Row=" + row; }
             public static string PreviewPositionSkipped(string reason) { return "PREVIEW: Position not restored | " + reason; }
             public static string MenuRestoreApplied(string menuName, int row) { return "PERSISTENCE: MenuRestore | Restored | " + menuName + " | Row=" + row; }
+            public static string SelectiveCopyWaiting() { return "SELECTIVECOPY: Active model | Not started | A live category request is still pending"; }
             public static string SelectiveCopyApplied(string fieldKey) { return "SELECTIVECOPY: " + fieldKey + " | Applied"; }
             public static string SelectiveCopyIdentical(string fieldKey) { return "SELECTIVECOPY: " + fieldKey + " | Identical to the current value | Not applied"; }
             public static string SelectiveCopyCategory(string category, int applied, int identical, int skipped) { return "SELECTIVECOPY: Category=" + category + " | Applied=" + applied + " | Identical=" + identical + " | Skipped=" + skipped; }

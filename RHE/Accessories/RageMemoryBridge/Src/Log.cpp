@@ -221,4 +221,5 @@ std::string SubHandlingDeletionOutcomeLine(uintptr_t handling, const std::string
 std::string SubHandlingClassUnreadable() { return "Class structure could not be read"; }
 std::string SubHandlingReadyAdvancedData(uintptr_t structure, uintptr_t constructorModuleOffset) { return " AdvancedData: Structure=" + Hex(structure) + " | ConstructorModuleOffset=" + Hex(constructorModuleOffset); }
 std::string SubHandlingAdvancedDataOutcomeLine(uintptr_t carData, int capacity, const std::string& outcome) { return "SUBHANDLING: CarData=" + Hex(carData) + " | AdvancedDataCapacity=" + std::to_string(capacity) + " | " + outcome; }
+std::string SubHandlingDestructorFaulted(uintptr_t handling, const std::string& category) { return "SUBHANDLING: Handling=" + Hex(handling) + " | Category=" + category + " | Deletion | The destructor faulted after the category was removed, so its object may be leaked"; }
 } // namespace Dbg

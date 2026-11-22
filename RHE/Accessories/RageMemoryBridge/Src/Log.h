@@ -96,4 +96,5 @@ std::string SubHandlingDeletionOutcomeLine(uintptr_t handling, const std::string
 std::string SubHandlingClassUnreadable();
 std::string SubHandlingReadyAdvancedData(uintptr_t structure, uintptr_t constructorModuleOffset);
 std::string SubHandlingAdvancedDataOutcomeLine(uintptr_t carData, int capacity, const std::string& outcome);
+std::string SubHandlingDestructorFaulted(uintptr_t handling, const std::string& category);
 } // namespace Dbg

@@ -503,6 +503,19 @@ void ResolveSubHandling()
     resolveFinished = true;
 }
 
+// A plugin that could not even pin itself never reaches the script loop, so its setup is marked finished and unresolved here
+void AbandonSubHandling()
+{
+    resolved = false;
+    resolveFinished = true;
+}
+
+int ReadSubHandlingSetupState()
+{
+    if (!resolveFinished) return static_cast<int>(SubHandlingSetupState::Pending);
+    return static_cast<int>(resolved ? SubHandlingSetupState::Ready : SubHandlingSetupState::Unavailable);
+}
+
 // An array's element pointer, count, and capacity, read once so the guarded functions apply the same sanity test
 struct ArrayView
 {
@@ -529,7 +542,8 @@ static void DestroyBuiltObject(void* object, void* recordedVtable)
     reinterpret_cast<DestructorFunction>((*reinterpret_cast<void***>(object))[VTABLE_DESTRUCTOR_SLOT])(object, DESTRUCTOR_DELETE_FLAG);
 }
 
-// Frees game memory on a failure path, where a fault while freeing is dropped since the attempt already reads Faulted
+// Frees game memory in its own guard, so a fault while freeing is dropped and never changes the outcome of the attempt around it
+// A leaked buffer is the cost of a fault here, and a caller that already committed its change keeps reporting it
 // Holds no C++ objects, since a structured exception frame cannot share a function with them
 static void GuardedFree(void* memory)
 {
@@ -543,9 +557,24 @@ static void GuardedFree(void* memory)
     }
 }
 
+// Runs an object's deleting destructor in its own guard and returns whether it completed
+// Holds no C++ objects, since a structured exception frame cannot share a function with them
+static bool GuardedDestroy(void* element, void* destructor)
+{
+    __try
+    {
+        reinterpret_cast<DestructorFunction>(destructor)(element, DESTRUCTOR_DELETE_FLAG);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
 // Every game call of one attempt, guarded so a fault reads Faulted instead of crashing the game
-// The object is built and verified before the array grows, so a failed build leaves the array as it was
-// It is stored in its slot before the count rises, so no reader sees an incomplete object or a slot the array does not hold yet
+// The object is built and verified before the array grows, and stored in its slot before the count rises, so no reader sees an incomplete object
+// Once the array holds the object the attempt reads Created, and the old buffer is freed in its own guard where a fault only leaks it
 // A fault inside the placement constructor still leaks that one pool slot, since running a destructor over memory in an unknown state is worse
 static SubHandlingOutcome GuardedCreate(uint8_t* handling, int category)
 {
@@ -614,7 +643,7 @@ static SubHandlingOutcome GuardedCreate(uint8_t* handling, int category)
             oldElements = elements;
         }
         *reinterpret_cast<uint16_t*>(array + ARRAY_COUNT_OFFSET) = static_cast<uint16_t>(view.count + 1);
-        if (oldElements != nullptr) gameFree(static_cast<void*>(oldElements));
+        if (oldElements != nullptr) GuardedFree(static_cast<void*>(oldElements));
         return SubHandlingOutcome::Created;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -625,7 +654,8 @@ static SubHandlingOutcome GuardedCreate(uint8_t* handling, int category)
 
 // The object's own deleting destructor returns its slot to the game's pool, so nothing else is freed here
 // The array slot is emptied first, so no reader is handed an object that is being destroyed, and the count stays as it was like a stock entry's empty slot
-static SubHandlingOutcome GuardedDelete(uint8_t* handling, int category)
+// The category is gone once the slot is empty, so a faulting destructor still reads Deleted and sets destructorFaulted for the caller to log
+static SubHandlingOutcome GuardedDelete(uint8_t* handling, int category, bool* destructorFaulted)
 {
     const CategoryFacts& facts = CATEGORY_FACTS[category];
     __try
@@ -639,8 +669,9 @@ static SubHandlingOutcome GuardedDelete(uint8_t* handling, int category)
             if (element == nullptr) continue;
             void** vtable = *reinterpret_cast<void***>(element);
             if (reinterpret_cast<HandlingTypeFunction>(vtable[VTABLE_HANDLING_TYPE_SLOT])(element) != facts.handlingType) continue;
+            void* destructor = vtable[VTABLE_DESTRUCTOR_SLOT];
             elements[i] = nullptr;
-            reinterpret_cast<DestructorFunction>(vtable[VTABLE_DESTRUCTOR_SLOT])(element, DESTRUCTOR_DELETE_FLAG);
+            *destructorFaulted = !GuardedDestroy(element, destructor);
             return SubHandlingOutcome::Deleted;
         }
         return SubHandlingOutcome::NotPresent;
@@ -653,8 +684,8 @@ static SubHandlingOutcome GuardedDelete(uint8_t* handling, int category)
 
 // Grows a Car object's AdvancedData array to hold at least the requested number of entries, leaving its count as it was
 // The array's storage is plain bytes the game constructs in place, so a new buffer is cleared and every element is constructed over it
-// The new pointer is stored first and the capacity second, so a reader never sees a capacity the buffer does not hold, and the old buffer is freed last
-// A fault before the pointer swap frees the new buffer, and one after it leaves the buffer in place, since the array holds it by then
+// The pointer is stored before the capacity, so a reader never sees a capacity the buffer does not hold, and the old buffer is freed last in its own guard
+// A fault before the swap frees the new buffer, and one after it only leaks the old one, since the array holds the new one by then
 static SubHandlingOutcome GuardedGrowAdvancedData(uint8_t* carData, int requested)
 {
     uint8_t* volatile newBuffer = nullptr;
@@ -691,7 +722,7 @@ static SubHandlingOutcome GuardedGrowAdvancedData(uint8_t* carData, int requeste
         *reinterpret_cast<uint8_t**>(array) = buffer;
         pointerSwapped = true;
         *reinterpret_cast<uint16_t*>(array + ARRAY_CAPACITY_OFFSET) = static_cast<uint16_t>(requested);
-        if (view.elements != nullptr) gameFree(view.elements);
+        if (view.elements != nullptr) GuardedFree(view.elements);
         return SubHandlingOutcome::Created;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
@@ -730,7 +761,11 @@ static SubHandlingOutcome AttemptCreation(uint8_t* handling, int category)
 
 static SubHandlingOutcome AttemptDeletion(uint8_t* handling, int category)
 {
-    return resolved && categoryStates[category].available ? GuardedDelete(handling, category) : SubHandlingOutcome::Unavailable;
+    if (!resolved || !categoryStates[category].available) return SubHandlingOutcome::Unavailable;
+    bool destructorFaulted = false;
+    SubHandlingOutcome outcome = GuardedDelete(handling, category, &destructorFaulted);
+    if (destructorFaulted) LogWarn(Dbg::SubHandlingDestructorFaulted(reinterpret_cast<uintptr_t>(handling), CATEGORY_FACTS[category].name));
+    return outcome;
 }
 
 static SubHandlingOutcome AttemptAdvancedDataGrowth(uint8_t* carData, int capacity)
@@ -763,9 +798,10 @@ static void ProcessRequestMap(RequestMap& queue, AttemptFunction attempt, Descri
 void ProcessSubHandlingRequests()
 {
     if (!resolveFinished) return;
+    // A growth runs before a deletion, so one in the same frame as its Car's deletion grows the live object instead of one the deletion destroyed
     ProcessRequestMap(creationRequests, AttemptCreation, DescribeCreation);
-    ProcessRequestMap(deletionRequests, AttemptDeletion, DescribeDeletion);
     ProcessRequestMap(advancedDataRequests, AttemptAdvancedDataGrowth, DescribeAdvancedDataGrowth);
+    ProcessRequestMap(deletionRequests, AttemptDeletion, DescribeDeletion);
 }
 
 static int MarkRequest(RequestMap& queue, uintptr_t address, int selector, bool selectorValid)

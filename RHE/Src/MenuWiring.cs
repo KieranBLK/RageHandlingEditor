@@ -1298,7 +1298,7 @@ namespace RHE
             NativeMenu rootMenu = context.RootMenu;
             SubHandlingCategory[] categories = context.Categories;
             NativeItem[] currentSlotItems = context.CurrentSubDataSlotItems;
-            string[] creationCandidates = GetSubDataCreationCandidates(vehicle.Type, vehicle.ClassType);
+            string[] creationCandidates = GetSubDataCreationCandidates(vehicle);
             HashSet<string> toggled;
             pendingSubDataToggle.TryGetValue(ResolveHandlingKey(vehicle), out toggled);
             int insertPosition = rootMenu.Items.IndexOf(context.Flags.DamageFlagsItem) + 1;
@@ -1319,10 +1319,10 @@ namespace RHE
                     }
                     else
                     {
-                        // A submenu row copies its menu's description every frame, so the Delete text goes on the menu, and it is the row's whole description
+                        // A submenu row copies its menu's description every frame, so the Delete text goes on the menu
                         string liveDescription = string.Empty;
-                        if (IsLiveCreationOffered(categoryName, vehicle.Type) && IsLiveDeletionRefused(categoryName, vehicle)) liveDescription = DESC_CATEGORY_REQUIRED_LIVE;
-                        else if (liveSubHandlingData && IsLiveBackendAvailable() && IsPhantomOnlyOnType(category.Definition, vehicle.Type)) liveDescription = DESC_CATEGORY_PHANTOM_ONLY_LIVE;
+                        if (IsLiveCreationOffered(categoryName, vehicle) && IsLiveDeletionRefused(categoryName, vehicle)) liveDescription = DESC_CATEGORY_REQUIRED_LIVE;
+                        else if (IsLiveBackendAvailable() && IsPhantomOnlyOnType(category.Definition, vehicle.Type)) liveDescription = DESC_CATEGORY_PHANTOM_ONLY_LIVE;
                         if (category.LiveMenu.Description != liveDescription) category.LiveMenu.Description = liveDescription;
                         resolved[i] = category.LiveSubmenu;
                     }
@@ -1331,10 +1331,11 @@ namespace RHE
                 else if (isToggled) resolved[i] = category.PhantomSubmenu;
                 else
                 {
-                    bool liveOnThisType = IsLiveCreationOffered(categoryName, vehicle.Type);
-                    // With the setting, the offsets, and the plugin all in place, only the vehicle's type keeps the category phantom, as with Boat offered on an off-road car
-                    bool onlyTypeRefuses = !liveOnThisType && liveSubHandlingData && IsLiveBackendAvailable();
-                    category.Placeholder.Description = liveOnThisType ? PLACEHOLDER_SUBDATA_CREATE_LIVE : onlyTypeRefuses ? PLACEHOLDER_SUBDATA_NOT_LIVE_ON_TYPE : PLACEHOLDER_SUBDATA_NOT_PRESENT;
+                    bool liveOnThisType = IsLiveCreationOffered(categoryName, vehicle);
+                    // With the offsets and the plugin in place, only the vehicle's type keeps the category phantom, as with Boat offered on an off-road car
+                    bool onlyTypeRefuses = !liveOnThisType && IsLiveBackendAvailable();
+                    string placeholderDescription = liveOnThisType ? PLACEHOLDER_SUBDATA_CREATE_LIVE : onlyTypeRefuses ? PLACEHOLDER_SUBDATA_NOT_LIVE_ON_TYPE : PLACEHOLDER_SUBDATA_NOT_PRESENT;
+                    category.Placeholder.Description = placeholderDescription;
                     resolved[i] = category.Placeholder;
                 }
                 if (!present) BackOutLiveCategoryMenus(context, category);

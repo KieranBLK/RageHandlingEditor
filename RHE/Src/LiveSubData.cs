@@ -77,6 +77,10 @@ namespace RHE
             // A growth holds the entries to write from StartIndex on, once the capacity holds them
             public int StartIndex;
             public List<AdvancedDataEntry> Entries;
+            // The AdvancedData block of the element a created Car carried, kept until the growth that writes its entries lands
+            public XElement SeedAdvancedData;
+            // True once the game's change is in the script's records, so a later failure never records it twice
+            public bool Recorded;
             // Null for every request no history entry waits on
             public LiveEditReplay Replay;
             // The Undo All this request belongs to, so its outcome lands in that run
@@ -105,27 +109,50 @@ namespace RHE
             return true;
         }
 
-        // Read once, since the plugin loads with the game and never appears or leaves afterward
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SubHandlingSetupStateFunction();
+
+        // Only a final answer is kept, since the plugin loads with the game and never appears or leaves afterward
         private static bool? livePluginAvailable;
+        private static SubHandlingSetupStateFunction readSetupState;
+
+        private static bool BindSetupState()
+        {
+            if (readSetupState != null) return true;
+            Delegate[] functions;
+            if (PluginBridge.BindExports(RAGE_MEMORY_BRIDGE_MODULE_NAME, new[] { READ_SUBHANDLING_SETUP_STATE_EXPORT }, typeof(SubHandlingSetupStateFunction), out functions) != PluginBridge.BindResult.Bound) return false;
+            readSetupState = (SubHandlingSetupStateFunction)functions[0];
+            return true;
+        }
 
         // Every live export must resolve, so a plugin built before an export existed reads as missing instead of failing a request later
-        private static bool IsLivePluginAvailable()
+        // A plugin still in its setup reads available, since a request made before its first pass waits for it, and a setup that failed reads unavailable for good
+        private bool IsLivePluginAvailable()
         {
             if (livePluginAvailable.HasValue) return livePluginAvailable.Value;
             bool available = true;
             for (int kind = 0; available && kind < LiveRequestExports.Length; kind++) available = PluginBridge.AreExportsPresent(RAGE_MEMORY_BRIDGE_MODULE_NAME, LiveRequestExports[kind]);
-            livePluginAvailable = available;
-            return available;
+            if (!available || !BindSetupState())
+            {
+                livePluginAvailable = false;
+                return false;
+            }
+            var setupState = (LivePluginSetupState)readSetupState();
+            if (setupState == LivePluginSetupState.Pending) return true;
+            livePluginAvailable = setupState == LivePluginSetupState.Ready;
+            if (!livePluginAvailable.Value) logger.Log(Dbg.Level.Info, Dbg.LivePluginSetupUnavailable());
+            return livePluginAvailable.Value;
         }
 
-        private static bool IsLiveBackendAvailable() { return RawMemory.RawOffsetsSupported && IsLivePluginAvailable(); }
+        private bool IsLiveBackendAvailable() { return RawMemory.RawOffsetsSupported && IsLivePluginAvailable(); }
 
         // A name no definition carries is never allowed, since the plugin has no number for it
-        private static bool IsLiveCreationAllowed(string category, VehicleType vehicleType)
+        private static bool IsLiveCreationAllowed(string category, Vehicle vehicle)
         {
             CategoryDefinition definition = ResolveCategoryDefinition(category);
-            if (definition == null || IsPhantomOnlyOnType(definition, vehicleType)) return false;
-            return definition.CandidateTypes == null || ContainsVehicleType(definition.CandidateTypes, vehicleType);
+            if (definition == null || IsPhantomOnlyOnType(definition, vehicle.Type)) return false;
+            if (definition.CandidateCheck != null && !definition.CandidateCheck(vehicle)) return false;
+            return definition.CandidateTypes == null || ContainsVehicleType(definition.CandidateTypes, vehicle.Type);
         }
 
         private static bool IsPhantomOnlyOnType(CategoryDefinition definition, VehicleType vehicleType)
@@ -133,31 +160,15 @@ namespace RHE
             return definition.PhantomOnlyTypes != null && ContainsVehicleType(definition.PhantomOnlyTypes, vehicleType);
         }
 
-        // Only a new action from the menu needs the setting, since a recorded entry or an Undo All must keep working while the plugin is present
-        private bool DoesSettingAllow(LiveRequestOrigin origin)
+        // The menu's descriptions and the requests read the same check, so a placeholder promises live creation only where a press requests it
+        private bool IsLiveCreationOffered(string category, Vehicle vehicle)
         {
-            return liveSubHandlingData || origin == LiveRequestOrigin.History || origin == LiveRequestOrigin.UndoAll;
-        }
-
-        private bool IsLiveCreationAllowedFor(LiveRequestOrigin origin, string category, VehicleType vehicleType)
-        {
-            return DoesSettingAllow(origin) && IsLiveBackendAvailable() && IsLiveCreationAllowed(category, vehicleType);
-        }
-
-        // The placeholder's description promises live creation only where a press would request it
-        private bool IsLiveCreationOffered(string category, VehicleType vehicleType)
-        {
-            return IsLiveCreationAllowedFor(LiveRequestOrigin.Player, category, vehicleType);
-        }
-
-        private bool IsLiveAdvancedDataGrowthAllowedFor(LiveRequestOrigin origin, HandlingData handling)
-        {
-            return DoesSettingAllow(origin) && IsLiveBackendAvailable() && handling != null && handling.IsValid && handling.CarHandlingData != null;
+            return IsLiveBackendAvailable() && IsLiveCreationAllowed(category, vehicle);
         }
 
         private bool IsLiveAdvancedDataGrowthOffered(HandlingData handling)
         {
-            return IsLiveAdvancedDataGrowthAllowedFor(LiveRequestOrigin.Player, handling);
+            return IsLiveBackendAvailable() && handling != null && handling.IsValid && handling.CarHandlingData != null;
         }
 
         private LiveRequest FindPendingLiveRequest(HandlingKey key, LiveRequestKind kind, string category)
@@ -166,6 +177,18 @@ namespace RHE
             {
                 LiveRequest request = pendingLiveRequests[i];
                 if (request.Key.Equals(key) && request.Kind == kind && request.Category == category) return request;
+            }
+            return null;
+        }
+
+        // The plugin keys a growth on the Car object's address and the capacity
+        // FindPendingLiveRequest cannot tell 2 capacities apart, since every growth shares one category name
+        private LiveRequest FindPendingLiveGrowth(IntPtr carAddress, int capacity)
+        {
+            for (int i = 0; i < pendingLiveRequests.Count; i++)
+            {
+                LiveRequest request = pendingLiveRequests[i];
+                if (request.Kind == LiveRequestKind.AdvancedDataGrowth && request.Address == carAddress && request.Selector == capacity) return request;
             }
             return null;
         }
@@ -241,17 +264,31 @@ namespace RHE
             }
         }
 
+        private bool BeginLiveCategoryCreation(EditorContext context, string category, Vehicle vehicle, LiveRequestOrigin origin, LiveEditReplay replay = null)
+        {
+            string refusal;
+            return BeginLiveCategoryCreation(context, category, vehicle, origin, replay, out refusal);
+        }
+
         // Returns False when live creation does not apply, and the caller then creates the export-only category as it always did
         // Returns True once a request is queued or already pending, so a second press while one waits does nothing
         // The request is for the vehicle's own handling, and a replay finishes with the request, so a failure moves its entry back to the stack it came from
-        private bool BeginLiveCategoryCreation(EditorContext context, string category, Vehicle vehicle, LiveRequestOrigin origin, LiveEditReplay replay = null)
+        // refusal names the other spawned vehicle that rules a live creation out, and is null for every other False
+        private bool BeginLiveCategoryCreation(EditorContext context, string category, Vehicle vehicle, LiveRequestOrigin origin, LiveEditReplay replay, out string refusal)
         {
+            refusal = null;
             CategoryDefinition definition = ResolveCategoryDefinition(category);
-            if (definition == null || !IsLiveCreationAllowedFor(origin, category, vehicle.Type)) return false;
+            if (definition == null || !IsLiveCreationOffered(category, vehicle)) return false;
             HandlingData handling = vehicle.HandlingData;
             HandlingKey key = ResolveHandlingKey(handling);
             if (!key.IsValid) return false;
             if (FindPendingLiveRequest(key, LiveRequestKind.Creation, category) != null) return true;
+            refusal = ResolveHandlingRefusal(key, definition, false);
+            if (refusal != null)
+            {
+                logger.Log(Dbg.Level.Info, Dbg.LiveSubDataUnavailable(category, refusal));
+                return false;
+            }
             LiveRequest request = BuildLiveRequest(LiveRequestKind.Creation, context, key, handling, vehicle, category, key.Address, (int)definition.PluginCategory, origin);
             request.Replay = replay;
             string unavailableReason;
@@ -280,9 +317,43 @@ namespace RHE
                 if (request.Kind == LiveRequestKind.Creation) logger.Log(Dbg.Level.Info, Dbg.LiveSubDataOutcome(request.ModelName, request.ModelHash, request.Category, outcomeName, elapsed));
                 else if (request.Kind == LiveRequestKind.Deletion) logger.Log(Dbg.Level.Info, Dbg.LiveSubDataDeletionOutcome(request.ModelName, request.ModelHash, request.Category, outcomeName, elapsed));
                 else logger.Log(Dbg.Level.Info, Dbg.LiveAdvancedDataOutcome(request.ModelName, request.ModelHash, request.Selector, outcomeName, elapsed));
-                FinishLiveRequest(request, outcome);
+                FinishLiveRequestGuarded(request, outcome);
             }
             if (pausedUndoAllRun != null && !HasPendingLiveRequest(pausedUndoAllRun.Key)) ResumeUndoAll();
+        }
+
+        // The request is already off the list, so a throw here must not stop the requests still waiting or leave the game's change unrecorded
+        private void FinishLiveRequestGuarded(LiveRequest request, LiveSubDataOutcome outcome)
+        {
+            try
+            {
+                FinishLiveRequest(request, outcome);
+            }
+            catch (Exception ex)
+            {
+                logger.Log(Dbg.Level.Error, Dbg.LiveRequestFinishFailed(request.ModelName, request.ModelHash, request.Category, ex.GetType().Name, ex.Message));
+                logger.Log(Dbg.Level.Error, Dbg.UnhandledExceptionStack(ex.StackTrace), false);
+                try
+                {
+                    SettleFailedLiveFinish(request, outcome);
+                }
+                catch (Exception settleException)
+                {
+                    logger.Log(Dbg.Level.Error, Dbg.LiveRequestFinishFailed(request.ModelName, request.ModelHash, request.Category, settleException.GetType().Name, settleException.Message));
+                }
+            }
+        }
+
+        // A change the plugin made is recorded even when the finish threw before it got that far, and the tree is refreshed over whatever state the game holds
+        private void SettleFailedLiveFinish(LiveRequest request, LiveSubDataOutcome outcome)
+        {
+            if (!request.Recorded)
+            {
+                if (request.Kind == LiveRequestKind.Creation && outcome == LiveSubDataOutcome.Created) RecordLiveCategoryCreated(request);
+                else if (request.Kind == LiveRequestKind.Deletion && outcome == LiveSubDataOutcome.Deleted) RecordLiveCategoryDeleted(request);
+            }
+            AddUndoAllFailure(request.Run, request.Category + " request", REASON_FINISH_FAILED);
+            RefreshForHandling(request.Key);
         }
 
         private void FinishLiveRequest(LiveRequest request, LiveSubDataOutcome outcome)
@@ -290,7 +361,12 @@ namespace RHE
             if (request.Kind == LiveRequestKind.Creation)
             {
                 if (outcome == LiveSubDataOutcome.Created) FinishLiveCategoryCreation(request);
-                else if (outcome == LiveSubDataOutcome.AlreadyPresent && IsCategoryPresent(request.Handling, request.Category)) RefreshForHandling(request.Key);
+                else if (outcome == LiveSubDataOutcome.AlreadyPresent && IsCategoryPresent(request.Handling, request.Category))
+                {
+                    // The category exists with its own values, so an element stored for this creation must not seed a later one
+                    RemoveStoredCategoryElement(request.Key, request.Category);
+                    RefreshForHandling(request.Key);
+                }
                 else FailLiveCategoryCreation(request, DescribeLiveFailure(outcome));
             }
             else if (request.Kind == LiveRequestKind.Deletion)
@@ -337,35 +413,59 @@ namespace RHE
             notifications.PostNotificationOnce(NOTIFICATION_KEY_UNDO_UNAPPLIED, replayedRedo ? NOTIF_REDO_FAILED : NOTIF_UNDO_FAILED);
         }
 
+        private void RemoveStoredCategoryElement(HandlingKey key, string category)
+        {
+            Dictionary<string, XElement> categoryMap;
+            if (pendingSubDataElements.TryGetValue(key, out categoryMap)) categoryMap.Remove(category);
+        }
+
+        // The category exists in the game, so everything that tracked it as export-only or as a coming creation is settled here before any step that can fail
+        // The element is used up, so a creation after a later delete starts from defaults and only an undo brings back the deleted values
+        // The undo entry is pushed last, so a second run after a throw only repeats it when the push never ran
+        private void RecordLiveCategoryCreated(LiveRequest request)
+        {
+            RemoveStoredCategoryElement(request.Key, request.Category);
+            ReleaseAssertionsForHandling(request.Key);
+            SetSubDataToggle(request.Key, request.Category, false);
+            HashSet<string> adopted;
+            if (adoptedPhantomCategories.TryGetValue(request.Key, out adopted)) adopted.Remove(request.Category);
+            MarkAutosavePending(request.Key);
+            // The captured block stays empty, since the entry's undo captures the category itself immediately before it removes it
+            if (request.Origin == LiveRequestOrigin.Player) PushStructuralEdit(new LiveCategoryEdit(StructuralKind.LiveCategoryCreate, request.Category, null) { Handling = request.Key });
+            request.Recorded = true;
+        }
+
+        // The category stays, holding the game's default values, so the entry and the tree match what the game holds
+        private void KeepLiveCategoryWithDefaults(LiveRequest request, string reason)
+        {
+            logger.Log(Dbg.Level.Warn, Dbg.LiveSubDataDefaultsKept(request.ModelName, request.ModelHash, request.Category, reason));
+            if (request.Origin == LiveRequestOrigin.UndoAll) AddUndoAllFailure(request.Run, request.Category + " values", reason);
+            else notifications.Notify(NOTIFICATION_KEY_PREFIX_LIVE_SUBDATA + request.Category, string.Format(NOTIF_LIVE_CATEGORY_CREATED_DEFAULTS, request.Category, reason));
+            RefreshForHandling(request.Key);
+        }
+
         // The element is the category's export-only one when earlier edits made it, so those carry over to the new object
         // The apply uses the held handling, so a vehicle that died since the press still gets a complete object and only skips its respawn
+        // The record comes before the apply, since a failed or throwing apply leaves the category in the game all the same
         private void FinishLiveCategoryCreation(LiveRequest request)
         {
             HandlingData handling = request.Handling;
             Vehicle vehicle = Entity.IsNullOrNotExisting(request.Vehicle) ? ResolveLiveVehicleOfHandling(request.Key) : request.Vehicle;
             XElement element = GetOrCreatePhantomElement(request.Key, request.Category);
+            RecordLiveCategoryCreated(request);
             var replayFlags = ReplayFlags.None;
             bool worksUpsideDownForced = false;
             if (!handling.IsValid || !handlingMetaXml.ApplyCategoryElement(request.Category, element, handling, vehicle, ResolveHandlingFieldGates(vehicle), ref replayFlags, out worksUpsideDownForced))
             {
-                FailLiveCategoryCreation(request, REASON_VALUES_NOT_WRITTEN);
+                KeepLiveCategoryWithDefaults(request, REASON_VALUES_NOT_WRITTEN);
                 return;
             }
             if (request.Category == CATEGORY_WEAPON) ApplyLiveWeaponBaseFields(handling, element);
             if (request.Category == CATEGORY_CAR) GrowAdvancedDataFromElement(request, handling, vehicle, element);
-            // The element is used up once the category exists, so a creation after a later delete starts from defaults and only an undo brings back the deleted values
-            Dictionary<string, XElement> categoryMap;
-            if (pendingSubDataElements.TryGetValue(request.Key, out categoryMap)) categoryMap.Remove(request.Category);
-            ReleaseAssertionsForHandling(request.Key);
-            SetSubDataToggle(request.Key, request.Category, false);
-            HashSet<string> adopted;
-            if (adoptedPhantomCategories.TryGetValue(request.Key, out adopted)) adopted.Remove(request.Category);
-            // The captured block stays empty, since the entry's undo captures the category itself immediately before it removes it
-            if (request.Origin == LiveRequestOrigin.Player) PushStructuralEdit(new LiveCategoryEdit(StructuralKind.LiveCategoryCreate, request.Category, null) { Handling = request.Key });
-            MarkAutosavePending(request.Key);
             RefreshForHandling(request.Key);
             bool vehicleAlive = !Entity.IsNullOrNotExisting(vehicle);
             logger.Log(Dbg.Level.Info, Dbg.LiveSubDataApplied(request.ModelName, request.ModelHash, request.Category, vehicleAlive));
+            if (worksUpsideDownForced) ReportWorksUpsideDownForced(vehicle);
             CreationEffect creationEffect = ResolveCategoryDefinition(request.Category).CreationEffect;
             bool needsRespawn = creationEffect == CreationEffect.Respawn;
             if (needsRespawn) replayFlags |= ReplayFlags.Respawn;
@@ -381,11 +481,11 @@ namespace RHE
             if (needsRespawn)
             {
                 // With no automatic respawn coming, the player has to be told the new category waits on one
-                if (autoRespawnMode == AutoRespawnMode.Off || !vehicleAlive) notifications.Notify(NOTIFICATION_KEY_PREFIX_LIVE_SUBDATA + request.Category, string.Format(NOTIF_LIVE_CATEGORY_CREATED_RESPAWN, request.Category));
+                bool respawnComing = vehicleAlive && autoRespawnMode != AutoRespawnMode.Off;
+                notifications.Notify(NOTIFICATION_KEY_PREFIX_LIVE_SUBDATA + request.Category, string.Format(respawnComing ? NOTIF_LIVE_CATEGORY_CREATED : NOTIF_LIVE_CATEGORY_CREATED_RESPAWN, request.Category));
                 return;
             }
             notifications.Notify(NOTIFICATION_KEY_PREFIX_LIVE_SUBDATA + request.Category, string.Format(bakedAtModelLoad ? NOTIF_LIVE_CATEGORY_CREATED_UNLOAD : NOTIF_LIVE_CATEGORY_CREATED, request.Category));
-            if (worksUpsideDownForced) ReportWorksUpsideDownForced(vehicle);
             if (request.Category == CATEGORY_SPECIAL_FLIGHT) notifications.Notify(NOTIFICATION_KEY_LIVE_SUBDATA_HOVER_HINT, NOTIF_LIVE_CATEGORY_CREATED_HOVER_HINT);
         }
 
@@ -418,8 +518,7 @@ namespace RHE
             if (request.Origin == LiveRequestOrigin.History && request.Replay != null)
             {
                 // The restored element was only stored for this creation, so it must not seed a later one
-                Dictionary<string, XElement> storedElements;
-                if (pendingSubDataElements.TryGetValue(request.Key, out storedElements)) storedElements.Remove(request.Category);
+                RemoveStoredCategoryElement(request.Key, request.Category);
                 RollBackFailedReplay(request, reason);
                 RefreshForHandling(request.Key);
                 return;
@@ -454,9 +553,9 @@ namespace RHE
         }
 
         // The refusal holds for every origin, since the game reads a required category unguarded whoever asks to remove it
-        private bool IsLiveDeletionAllowedFor(LiveRequestOrigin origin, string category, Vehicle vehicle)
+        private bool IsLiveDeletionOffered(string category, Vehicle vehicle)
         {
-            return IsLiveCreationAllowedFor(origin, category, vehicle.Type) && !IsLiveDeletionRefused(category, vehicle);
+            return IsLiveCreationOffered(category, vehicle) && !IsLiveDeletionRefused(category, vehicle);
         }
 
         // Returns False when live deletion does not apply, with reason naming why, and the caller then excludes the category from the save instead
@@ -467,7 +566,7 @@ namespace RHE
         {
             reason = "Live deletion not available for this category";
             CategoryDefinition definition = ResolveCategoryDefinition(category);
-            if (definition == null || !IsLiveDeletionAllowedFor(origin, category, vehicle))
+            if (definition == null || !IsLiveDeletionOffered(category, vehicle))
             {
                 if (definition != null && IsLiveDeletionRefused(category, vehicle)) reason = REASON_REQUIRED_CATEGORY;
                 return false;
@@ -481,9 +580,10 @@ namespace RHE
                 reason = "Category not present";
                 return false;
             }
-            if (category == CATEGORY_SEA_PLANE && IsAnyVehicleOnHandlingOnOrNearWater(key))
+            string handlingRefusal = ResolveHandlingRefusal(key, definition, true);
+            if (handlingRefusal != null)
             {
-                reason = SEA_PLANE_NEAR_WATER_REASON;
+                reason = handlingRefusal;
                 return false;
             }
             XElement captured = handlingMetaXml.BuildCategoryElement(category, handling);
@@ -503,18 +603,29 @@ namespace RHE
             return true;
         }
 
-        // A model keeps the pontoon samples it baked from SeaPlane data when it loaded, so a vehicle on a handling that lost it crashes the game once it touches water
-        // The deletion acts on the handling, which every model on it shares, so every vehicle on it is checked, once per request and never per tick
-        // A helicopter floating on its pontoons does not report itself in water, so a vehicle whose underside sits just above the water counts too
-        private static bool IsAnyVehicleOnHandlingOnOrNearWater(HandlingKey key)
+        // Creation and deletion change the handling entry every model on it shares, so every spawned vehicle on it is judged, once per request and never per tick
+        // A model that shares the handling but is not spawned cannot be checked
+        // A SeaPlane deletion is refused while any of them is on or near water, since a model keeps the pontoon samples it baked at load
+        // A deletion is also refused for a vehicle that needs the category and a creation for one the category is phantom only on, and null means nothing refuses
+        private static string ResolveHandlingRefusal(HandlingKey key, CategoryDefinition definition, bool deletion)
         {
+            bool checkWater = deletion && definition.Name == CATEGORY_SEA_PLANE;
+            bool checkNeeded = deletion && (definition.RequiredTypes != null || definition.RequiredModelHashes != null);
+            bool checkPhantomOnly = !deletion && definition.PhantomOnlyTypes != null;
+            if (!checkWater && !checkNeeded && !checkPhantomOnly) return null;
+            string refusal = null;
             foreach (Vehicle candidate in World.GetAllVehicles())
             {
-                if (ResolveHandlingKey(candidate).Equals(key) && IsVehicleOnOrNearWater(candidate)) return true;
+                if (!ResolveHandlingKey(candidate).Equals(key)) continue;
+                if (checkWater && IsVehicleOnOrNearWater(candidate)) return SEA_PLANE_NEAR_WATER_REASON;
+                if (checkNeeded && IsLiveDeletionRefused(definition.Name, candidate)) refusal = REASON_SHARED_REQUIRED;
+                else if (checkPhantomOnly && IsPhantomOnlyOnType(definition, candidate.Type)) refusal = REASON_SHARED_PHANTOM;
             }
-            return false;
+            return refusal;
         }
 
+        // A vehicle on a handling that lost SeaPlane data crashes the game once it touches water
+        // A helicopter floating on its pontoons does not report itself in water, so a vehicle whose underside sits just above the water counts too
         private static bool IsVehicleOnOrNearWater(Vehicle vehicle)
         {
             if (vehicle.IsInWater) return true;
@@ -527,14 +638,20 @@ namespace RHE
         }
 
         // A redo can delete a category the user excluded since, and an absent category's set toggle would read as created for saving, so the toggle is cleared
-        // The vehicle keeps whatever the game built from the category when it spawned, so every deletion asks for a respawn
-        private void FinishLiveCategoryDeletion(LiveRequest request)
+        // The user's own delete pushes the undo entry only once the plugin confirms, since a request that fails changed nothing
+        private void RecordLiveCategoryDeleted(LiveRequest request)
         {
             ReleaseAssertionsForHandling(request.Key);
             SetSubDataToggle(request.Key, request.Category, false);
-            // The user's own delete pushes the undo entry only once the plugin confirms, since a request that fails changed nothing
-            if (request.Origin == LiveRequestOrigin.Player) PushStructuralEdit(new LiveCategoryEdit(StructuralKind.LiveCategoryDelete, request.Category, EncodeElement(request.Captured)) { Handling = request.Key });
             MarkAutosavePending(request.Key);
+            if (request.Origin == LiveRequestOrigin.Player) PushStructuralEdit(new LiveCategoryEdit(StructuralKind.LiveCategoryDelete, request.Category, EncodeElement(request.Captured)) { Handling = request.Key });
+            request.Recorded = true;
+        }
+
+        // The vehicle keeps whatever the game built from the category when it spawned, so every deletion asks for a respawn
+        private void FinishLiveCategoryDeletion(LiveRequest request)
+        {
+            RecordLiveCategoryDeleted(request);
             RefreshForHandling(request.Key);
             logger.Log(Dbg.Level.Info, Dbg.LiveSubDataDeleted(request.ModelName, request.ModelHash, request.Category));
             // Only an unload drops the baked pontoon samples, so the warning posts on every origin, Undo All included
@@ -563,9 +680,11 @@ namespace RHE
         // Both directions of a live category edit end here
         // A creation direction restores the captured element as the category's export-only element, so the creation applies it
         // The plugin answers on its own frame, so the entry reports applied once the request is queued, and a failure moves it back
+        // A refusal before any request is queued leaves the entry on its own stack when the player can clear its cause, so the next press retries it
         private bool ApplyLiveCategoryEdit(LiveCategoryEdit edit, bool redo, HandlingData handling, out string reason)
         {
             reason = null;
+            edit.RefusalRetryable = false;
             Vehicle vehicle = ResolveLiveVehicleOfHandling(edit.Handling);
             EditorContext owner = ResolveEditorContextOfHandling(edit.Handling);
             if (vehicle == null || owner == null || handling == null || !handling.IsValid)
@@ -574,7 +693,12 @@ namespace RHE
                 return false;
             }
             bool creating = (edit.Kind == StructuralKind.LiveCategoryCreate) == redo;
-            if (!creating) return BeginLiveCategoryDeletion(owner, edit.Category, vehicle, new LiveEditReplay(edit, redo), LiveRequestOrigin.History, out reason);
+            if (!creating)
+            {
+                if (BeginLiveCategoryDeletion(owner, edit.Category, vehicle, new LiveEditReplay(edit, redo), LiveRequestOrigin.History, out reason)) return true;
+                edit.RefusalRetryable = IsClearableRefusal(reason);
+                return false;
+            }
             XElement restored = DecodeElement(edit.EncodedBlock);
             if (restored == null)
             {
@@ -583,19 +707,30 @@ namespace RHE
             }
             Dictionary<string, XElement> categoryMap = GetOrAdd(pendingSubDataElements, edit.Handling);
             categoryMap[edit.Category] = restored;
-            if (BeginLiveCategoryCreation(owner, edit.Category, vehicle, LiveRequestOrigin.History, new LiveEditReplay(edit, redo))) return true;
-            reason = "live creation not available";
+            string creationRefusal;
+            if (BeginLiveCategoryCreation(owner, edit.Category, vehicle, LiveRequestOrigin.History, new LiveEditReplay(edit, redo), out creationRefusal)) return true;
+            // The element was stored only for this creation, so a refused one must not leave it for a later creation to seed from
+            RemoveStoredCategoryElement(edit.Handling, edit.Category);
+            reason = creationRefusal ?? "live creation not available";
+            edit.RefusalRetryable = IsClearableRefusal(creationRefusal);
             return false;
         }
 
+        // Water and another spawned vehicle on the handling pass once the player moves the vehicle or removes the other one
+        // Every other refusal (no plugin, a required category on the vehicle itself) lasts, so its entry moves aside and never pins the stack
+        private static bool IsClearableRefusal(string reason)
+        {
+            return reason == SEA_PLANE_NEAR_WATER_REASON || reason == REASON_SHARED_REQUIRED || reason == REASON_SHARED_PHANTOM;
+        }
+
         // An applied handling asks for each category it carries that the vehicle lacks to be created live, with the applied element as its values
-        // The vehicle's type must be one of the category's candidate types, and the request needs a tree editing the handling to own it
+        // The vehicle must be a candidate for the category, by its type and the category's own check, and the request needs a tree editing the handling to own it
         // Without both the caller adopts the category as phantom
         private bool RequestAppliedCategoryCreation(HandlingKey key, HandlingData handling, Vehicle vehicle, string category, XElement appliedElement, XElement handlingItem, LiveRequestOrigin origin)
         {
             if (Entity.IsNullOrNotExisting(vehicle) || !handling.IsValid) return false;
             EditorContext owner = ResolveEditorContextOfHandling(key);
-            if (owner == null || !IsLiveCreationAllowedFor(origin, category, vehicle.Type)) return false;
+            if (owner == null || !IsLiveCreationOffered(category, vehicle)) return false;
             StoreAppliedCategoryElement(key, category, appliedElement);
             if (category == CATEGORY_WEAPON) SeedAdoptedWeaponDamageField(key, handlingItem);
             return BeginLiveCategoryCreation(owner, category, vehicle, origin);
@@ -649,32 +784,52 @@ namespace RHE
             return entries;
         }
 
-        // Returns False when live growth does not apply, and the caller then keeps what it always did
+        // Returns False when live growth does not apply, with reason naming why, and the caller then keeps what it always did
         // Returns True once the request is queued, and the poll writes the entries when the plugin has made the room
-        // run names the Undo All a follow-up request belongs to, for a request queued after the Undo All's own apply has returned
-        private bool BeginAdvancedDataGrowth(EditorContext context, Vehicle vehicle, HandlingData handling, int capacity, LiveRequestOrigin origin, int startIndex, List<AdvancedDataEntry> entries, UndoAllRun run = null)
+        // A growth is refused while a deletion of the same Car category waits, since the plugin would grow an object the deletion is destroying
+        // run names the Undo All a follow-up request belongs to, and seed is the block a created Car's element carried, which a failed growth keeps as pending
+        private bool BeginAdvancedDataGrowth(EditorContext context, Vehicle vehicle, HandlingData handling, int capacity, LiveRequestOrigin origin, int startIndex, List<AdvancedDataEntry> entries, out string reason, UndoAllRun run = null, XElement seed = null)
         {
-            if (!IsLiveAdvancedDataGrowthAllowedFor(origin, handling) || capacity < 1 || capacity > ADVANCEDDATA_COUNT_SANITY_CEILING) return false;
+            reason = REASON_LIVE_UNAVAILABLE;
+            if (!IsLiveAdvancedDataGrowthOffered(handling) || capacity < 1 || capacity > ADVANCEDDATA_COUNT_SANITY_CEILING) return false;
             HandlingKey key = ResolveHandlingKey(handling);
             if (!key.IsValid) return false;
-            LiveRequest request = BuildLiveRequest(LiveRequestKind.AdvancedDataGrowth, context, key, handling, vehicle, "AdvancedData", handling.CarHandlingData.MemoryAddress, capacity, origin);
+            if (FindPendingLiveRequest(key, LiveRequestKind.Deletion, CATEGORY_CAR) != null)
+            {
+                reason = REASON_CAR_DELETE_PENDING;
+                return false;
+            }
+            IntPtr carAddress = handling.CarHandlingData.MemoryAddress;
+            if (FindPendingLiveGrowth(carAddress, capacity) != null)
+            {
+                reason = REASON_GROWTH_PENDING;
+                return false;
+            }
+            LiveRequest request = BuildLiveRequest(LiveRequestKind.AdvancedDataGrowth, context, key, handling, vehicle, "AdvancedData", carAddress, capacity, origin);
             request.StartIndex = startIndex;
             request.Entries = entries;
+            request.SeedAdvancedData = seed;
             if (run != null) request.Run = run;
             string unavailableReason;
             return StartLiveRequest(request, out unavailableReason);
         }
 
         // The count is raised before any entry is written, since a write past the old count is refused
-        private bool WriteAdvancedDataEntries(HandlingData handling, int startIndex, List<AdvancedDataEntry> entries)
+        // Entries land from the lower of startIndex and the count the array holds now, since an entry removed since the press leaves nothing to write a gap over
+        // A failed write puts the old count back, and writtenFrom is the index the entries landed at
+        private bool WriteAdvancedDataEntries(HandlingData handling, int startIndex, List<AdvancedDataEntry> entries, out int writtenFrom)
         {
-            int newCount = startIndex + entries.Count;
+            int oldCount = RawMemory.GetAdvancedDataCount(handling);
+            writtenFrom = Math.Min(startIndex, oldCount);
+            int newCount = writtenFrom + entries.Count;
             if (newCount > RawMemory.GetAdvancedDataCapacity(handling)) return false;
             ReleaseAdvancedDataAssertions();
             if (!RawMemory.SetAdvancedDataCount(handling, newCount)) return false;
             for (int i = 0; i < entries.Count; i++)
             {
-                if (!RawMemory.WriteAdvancedDataEntry(handling, startIndex + i, entries[i])) return false;
+                if (RawMemory.WriteAdvancedDataEntry(handling, writtenFrom + i, entries[i])) continue;
+                RawMemory.SetAdvancedDataCount(handling, oldCount);
+                return false;
             }
             return true;
         }
@@ -685,23 +840,41 @@ namespace RHE
         {
             HandlingData handling = request.Handling;
             if (!handling.IsValid || handling.CarHandlingData == null || handling.CarHandlingData.MemoryAddress != request.Address) return false;
-            if (!WriteAdvancedDataEntries(handling, request.StartIndex, request.Entries)) return false;
+            int writtenFrom;
+            if (!WriteAdvancedDataEntries(handling, request.StartIndex, request.Entries, out writtenFrom)) return false;
             if (request.Origin == LiveRequestOrigin.Player)
             {
                 AdvancedDataStore liveStore = AdvancedDataStores[(int)AdvancedDataMenuKind.Live];
-                if (request.StartIndex == 0) PushStructuralEdit(new AdvancedDataBlockEdit(liveStore, liveStore.BlockCreateKind, null) { Handling = request.Key });
-                else PushStructuralEdit(new AdvancedDataEntryEdit(liveStore, liveStore.AddSlotKind, request.StartIndex, null) { Handling = request.Key });
+                if (writtenFrom == 0) PushStructuralEdit(new AdvancedDataBlockEdit(liveStore, liveStore.BlockCreateKind, null) { Handling = request.Key });
+                else PushStructuralEdit(new AdvancedDataEntryEdit(liveStore, liveStore.AddSlotKind, writtenFrom, null) { Handling = request.Key });
             }
             MarkAutosavePending(request.Key);
             RefreshForHandling(request.Key);
-            logger.Log(Dbg.Level.Info, Dbg.LiveAdvancedDataApplied(request.ModelName, request.ModelHash, request.StartIndex + request.Entries.Count));
+            logger.Log(Dbg.Level.Info, Dbg.LiveAdvancedDataApplied(request.ModelName, request.ModelHash, writtenFrom + request.Entries.Count));
             return true;
+        }
+
+        // A created Car's element is gone once the category exists, so its AdvancedData entries are kept as the pending export-only block when their growth fails
+        // An existing block or live entries win, and the entries are not merged
+        private void KeepAdvancedDataSeed(HandlingKey key, HandlingData handling, XElement seed, string modelName, int modelHash)
+        {
+            if (seed == null) return;
+            int entries = ListItemElements(seed).Length;
+            if (pendingAdvancedData.ContainsKey(key) || (handling.IsValid && RawMemory.GetAdvancedDataCount(handling) > 0))
+            {
+                logger.Log(Dbg.Level.Warn, Dbg.LiveAdvancedDataSeedDropped(modelName, modelHash, entries));
+                return;
+            }
+            pendingAdvancedData[key] = seed;
+            logger.Log(Dbg.Level.Warn, Dbg.LiveAdvancedDataSeedKept(modelName, modelHash, entries));
+            RefreshPendingAdvancedData(key);
         }
 
         // The press on the placeholder falls back to the pending export-only entry, and every other request only reports why it did not land
         private void FailAdvancedDataGrowth(LiveRequest request, string reason)
         {
             logger.Log(Dbg.Level.Warn, Dbg.LiveAdvancedDataFailed(request.ModelName, request.ModelHash, request.Selector, reason));
+            KeepAdvancedDataSeed(request.Key, request.Handling, request.SeedAdvancedData, request.ModelName, request.ModelHash);
             if (request.Origin == LiveRequestOrigin.UndoAll)
             {
                 AddUndoAllFailure(request.Run, "AdvancedData growth", reason);
@@ -724,7 +897,11 @@ namespace RHE
             int wanted = Math.Min(items.Length, ADVANCEDDATA_COUNT_SANITY_CEILING);
             if (wanted == 0) return;
             LiveRequestOrigin origin = creation.Origin == LiveRequestOrigin.UndoAll ? LiveRequestOrigin.UndoAll : LiveRequestOrigin.History;
-            if (!BeginAdvancedDataGrowth(creation.Owner, vehicle, handling, wanted, origin, 0, ParseAdvancedDataEntries(items, 0, wanted), creation.Run)) logger.Log(Dbg.Level.Warn, Dbg.LiveAdvancedDataFailed(creation.ModelName, creation.ModelHash, wanted, REASON_LIVE_UNAVAILABLE));
+            var seed = new XElement(advancedData);
+            string reason;
+            if (BeginAdvancedDataGrowth(creation.Owner, vehicle, handling, wanted, origin, 0, ParseAdvancedDataEntries(items, 0, wanted), out reason, creation.Run, seed)) return;
+            logger.Log(Dbg.Level.Warn, Dbg.LiveAdvancedDataFailed(creation.ModelName, creation.ModelHash, wanted, reason));
+            KeepAdvancedDataSeed(creation.Key, handling, seed, creation.ModelName, creation.ModelHash);
         }
 
         // The entries past the array's capacity are the ones the apply could not write, and the count they raise becomes the document's own
@@ -733,7 +910,12 @@ namespace RHE
         {
             int wanted = Math.Min(items.Length, ADVANCEDDATA_COUNT_SANITY_CEILING);
             if (wanted <= writtenCount) return false;
-            return BeginAdvancedDataGrowth(ResolveEditorContextOfHandling(key), vehicle, handling, wanted, origin, writtenCount, ParseAdvancedDataEntries(items, writtenCount, wanted));
+            string reason;
+            if (BeginAdvancedDataGrowth(ResolveEditorContextOfHandling(key), vehicle, handling, wanted, origin, writtenCount, ParseAdvancedDataEntries(items, writtenCount, wanted), out reason)) return true;
+            if (reason == REASON_LIVE_UNAVAILABLE) return false;
+            bool vehicleKnown = !Entity.IsNullOrNotExisting(vehicle);
+            logger.Log(Dbg.Level.Warn, Dbg.LiveAdvancedDataFailed(vehicleKnown ? modelNames.ResolveModelName(vehicle) : "Unknown vehicle", vehicleKnown ? vehicle.Model.Hash : 0, wanted, reason));
+            return false;
         }
     }
 }

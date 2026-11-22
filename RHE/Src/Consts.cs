@@ -419,9 +419,9 @@ namespace RHE
         // Ticks between automatic FlushLog() calls, keeping logBuffer's unwritten tail bounded between writes
         private const int LOG_FLUSH_INTERVAL = 100;
         // --Notifications.cs--
-        // ADD_TEXT_COMPONENT_SUBSTRING_PLAYER_NAME accepts at most 99 characters, so a longer message is cut to fit, ending in a 3-character ellipsis
-        private const int NOTIF_MAX_CHARS    = 99;
-        private const int NOTIF_ELLIPSIS_LEN = 3;
+        // One text component holds at most 99 UTF-8 bytes and the multi-component label holds 10, so a message splits into pieces and only one past all 10 is cut
+        private const int NOTIF_PIECE_MAX_BYTES = 99;
+        private const int NOTIF_MAX_PIECES      = 10;
         // Display durations and the default PostNotificationOnce cooldown, in game milliseconds (Game.GameTime), so they hold at any frame rate
         private const int NOTIF_DISPLAY_MS       = 6000;
         private const int NOTIF_DISPLAY_WARN_MS  = 8000;
@@ -432,6 +432,10 @@ namespace RHE
         // --FileEvents.cs--
         // Game milliseconds a watched file must go without a new change event before the script reads it, since an editor saves in several writes
         private const int FILE_WATCH_DEBOUNCE_MS = 300;
+        // --UpdateCheck.cs--
+        // Milliseconds the release request may wait to connect and, separately, to read the reply, before it gives up
+        // A script reload waits on a request in flight, so this also caps how long a reload can stall on a slow connection
+        private const int UPDATE_CHECK_TIMEOUT_MS = 10000;
         // --Tick.cs--
         // Game milliseconds between polls for external edits to the INI, the saved handlings, and the ModelMetaData file
         // Used only for a file whose watcher could not start

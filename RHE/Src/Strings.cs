@@ -88,6 +88,7 @@ namespace RHE
         private const string TITLE_TOGGLE_MENU_KEY          = "Toggle Menu Key";
         private const string TITLE_CHEAT_STRING             = "Cheat String";
         private const string TITLE_AUTO_RESPAWN             = "Auto Respawn";
+        private const string TITLE_CHECK_FOR_UPDATES        = "Check For Updates";
         private const string TITLE_RESET_ALL_SETTINGS       = "Reset All Settings";
         private const string TITLE_ALWAYS_OVERWRITE         = "Always Overwrite";
         private const string TITLE_PROMPT_ON_SAVE           = "Prompt On Save";
@@ -106,9 +107,7 @@ namespace RHE
         private const string TITLE_SECTION_HANDLING_PREVIEW = "Handling Preview";
         private const string TITLE_SECTION_VISUALIZATION    = "Visualization";
         private const string TITLE_SECTION_APPEARANCE       = "Menu Appearance";
-        private const string TITLE_SECTION_EXPERIMENTAL     = "Experimental";
         private const string TITLE_SECTION_DEBUG            = "Debug";
-        private const string TITLE_EXP_LIVE_SUBHANDLINGDATA = "Live SubHandlingData";
         private const string TITLE_VIS_ISOLATED_DRAWING     = "Isolated Drawing";
         private const string TITLE_VIS_BOUNDING_BOX         = "Bounding Box";
         private const string TITLE_VIS_CENTER_OF_MASS       = "Center-Of-Mass";
@@ -149,19 +148,24 @@ namespace RHE
 
         // [Placeholders] Rows that stand in for something absent
         private const string PLACEHOLDER_SUBDATA_NOT_PRESENT      = "This SubHandlingData is not present on this vehicle. Press Enter to create it statically for saving to an export. ~y~Does not apply live";
-        private const string PLACEHOLDER_SUBDATA_CREATE_LIVE      = "This SubHandlingData is not present on this vehicle. Press Enter to create it in the running game. ~y~Experimental, falls back to static creation when it can't be created live";
+        private const string PLACEHOLDER_SUBDATA_CREATE_LIVE      = "This SubHandlingData is not present on this vehicle. Press Enter to create it in the running game. ~y~Falls back to static creation when it can't be created live";
         private const string PLACEHOLDER_SUBDATA_NOT_LIVE_ON_TYPE = "~y~This SubHandlingData can't be created live on this vehicle type.~s~ Press Enter to create it statically for saving to an export";
         private const string PLACEHOLDER_CATEGORY_NOT_PRESENT     = "This category is not present on this vehicle. Press Enter to create it statically for saving to an export. ~y~Does not apply live";
         private const string PLACEHOLDER_CATEGORY_EXCLUDED        = "This category is excluded from the next save. Press Enter to include it again";
-        private const string PLACEHOLDER_ADVANCEDDATA_CREATE_LIVE = "This vehicle has no AdvancedData entries. Press Enter to create one in the running game. ~y~Experimental, falls back to static creation when it can't be created live";
+        private const string PLACEHOLDER_ADVANCEDDATA_CREATE_LIVE = "This vehicle has no AdvancedData entries. Press Enter to create one in the running game. ~y~Falls back to static creation when it can't be created live";
         private const string PLACEHOLDER_CATEGORY_NOT_CREATED     = "This category has not been created yet. Press Enter to create it. ~y~Does not apply live";
         private const string PLACEHOLDER_DIFF_NOT_PRESENT         = "Not in the original handling";
 
+        // [Notifications: Feed] The game's text label made of 10 text components, which every toast posts through so it can run past one component's length
+        private const string NOTIF_FEED_LABEL = "CELL_EMAIL_BCON";
+
         // [Notifications: System] Toasts for settings, INI, and error events
-        private const string NOTIF_ERROR_MESSAGE  = "~r~RHE: {0}";
-        private const string NOTIF_SETTINGS_RESET = "~g~RHE: All settings reset to defaults";
-        private const string NOTIF_INI_RELOADED   = "~g~RHE: INI reloaded";
-        private const string NOTIF_INI_REJECTED   = "~y~RHE: Invalid INI value(s) rejected, check log";
+        private const string NOTIF_ERROR_MESSAGE    = "~r~RHE: {0}";
+        private const string NOTIF_SETTINGS_RESET   = "~g~RHE: All settings reset to defaults";
+        private const string NOTIF_INI_RELOADED     = "~g~RHE: INI reloaded";
+        private const string NOTIF_INI_REJECTED     = "~y~RHE: Invalid INI value(s) rejected, check log";
+        // A template: UpdateChecker.Finish fills {0} with the latest release's version
+        private const string NOTIF_UPDATE_AVAILABLE = "RHE: Update v{0} is available. Download it from GitHub or 5Mods";
 
         // [Notifications: Input And Editing] Toasts for typed entry, key rebinding, value bounds, and the arm-then-confirm cue
         private const string NOTIF_VALUE_BOUNDED              = "~y~RHE: Value bounded to {0}";
@@ -263,6 +267,8 @@ namespace RHE
         private const string NOTIF_SEA_PLANE_DELETE_IN_WATER        = "~y~RHE: Remove any vehicle using this handling from or near the water before deleting, the game will crash otherwise";
         private const string NOTIF_SEA_PLANE_DELETED_UNLOAD         = "~y~RHE: SeaPlaneHandling deleted. Unload this vehicle before entering the water with it or it'll crash the game";
         private const string NOTIF_LIVE_CATEGORY_REQUIRED_EXCLUDED  = "~y~RHE: {0} Handling can't be deleted live on this vehicle type, excluded from next save instead";
+        private const string NOTIF_LIVE_CATEGORY_SHARED_EXCLUDED    = "~y~RHE: {0} Handling can't be deleted live, another vehicle with this handling needs it. Excluded from next save instead";
+        private const string NOTIF_LIVE_CATEGORY_CREATED_DEFAULTS   = "~y~RHE: {0} Handling created with default values. {1}";
         private const string NOTIF_LIVE_CATEGORY_CREATED_HOVER_HINT = "RHE: Hold the vehicle roof control (H by default) to switch hover mode";
         private const string NOTIF_LIVE_ADVANCEDDATA_FAILED         = "~y~RHE: AdvancedData entry could not be added live: {0}";
         private const string NOTIF_LIVE_ADVANCEDDATA_CREATE_FAILED  = "~y~RHE: AdvancedData created statically. {0}";
@@ -288,6 +294,12 @@ namespace RHE
         private const string REASON_LIVE_UNAVAILABLE   = "Live creation is unavailable";
         private const string REASON_VALUES_NOT_WRITTEN = "Its values could not be written";
         private const string REASON_REQUIRED_CATEGORY  = "The game reads it as required on this vehicle type, so removing it would crash the game";
+        // The phrases of the refusals that judge every vehicle sharing the handling, of growth requests refused before the plugin, and of a request whose finish threw
+        private const string REASON_SHARED_REQUIRED    = "Another vehicle with this handling needs it, so removing it would crash the game";
+        private const string REASON_SHARED_PHANTOM     = "Another vehicle with this handling cannot hold it live, so creating it would crash the game";
+        private const string REASON_GROWTH_PENDING     = "An array resize to the same capacity is already waiting on the plugin";
+        private const string REASON_CAR_DELETE_PENDING = "The Car category is being deleted";
+        private const string REASON_FINISH_FAILED      = "An error stopped the request from finishing";
 
         // [Notifications: Search] Toasts for the vehicle model search
         private const string NOTIF_SEARCH_TOO_SHORT         = "~y~RHE: Type at least {0} characters to search";
@@ -357,6 +369,8 @@ namespace RHE
         private const string AUTOSAVES_SUBFOLDER = "Autosaves";
         // Where the state a script reload carries is written when the script unloads, which the next load reads once and deletes. One section per kind of state
         private const string RELOAD_STATE_PATH = "scripts\\RageHandlingEditor\\ReloadState";
+        // Added to a file's own path for the copy a write fills before it replaces the file, which no listing pattern matches
+        private const string REPLACING_WRITE_SUFFIX = ".tmp";
         // The 2 script hooks the log header reads the file versions of
         private const string SHV_FILE_PATH = "ScriptHookV.dll";
         private const string SHVDN_FILE_PATH = "ScriptHookVDotNet.asi";
@@ -368,7 +382,6 @@ namespace RHE
         private const string SECTION_HandlingPreview = "[HandlingPreview]";
         private const string SECTION_Visualization   = "[Visualization]";
         private const string SECTION_Appearance      = "[Appearance]";
-        private const string SECTION_Experimental    = "[Experimental]";
         private const string SECTION_Debug           = "[Debug]";
 
         // [INI: Keys] The INI's key names, grouped by section
@@ -378,6 +391,7 @@ namespace RHE
         private const string KEY_CTL_KeyToggleMenu      = "KeyToggleMenu";
         // [Script]
         private const string KEY_SCR_AutoRespawn           = "AutoRespawn";
+        private const string KEY_SCR_CheckForUpdates       = "CheckForUpdates";
         private const string KEY_SCR_ReassertDriftedFields = "ReassertDriftedFields";
         private const string KEY_SCR_ResetAllSettings      = "ResetAllSettings";
         // [Exporting]
@@ -394,8 +408,6 @@ namespace RHE
         private const string KEY_APR_BannerColorRGB = "BannerColorRGB";
         private const string KEY_APR_MaxRows        = "MaxRows";
         private const string KEY_APR_MenuPosition   = "MenuPosition";
-        // [Experimental]
-        private const string KEY_EXP_LiveSubHandlingData = "LiveSubHandlingData";
         // [Debug]
         private const string KEY_DBG_AlwaysClearLogOnReload = "AlwaysClearLogOnReload";
         private const string KEY_DBG_LoggingMode            = "LoggingMode";
@@ -410,6 +422,7 @@ namespace RHE
         private const string CMT_SCR_AutoRespawn1 = "Off, Instant, or Delayed. Respawns the vehicle after an edit to anything that only takes effect after one";
         // A template: AutoRespawnDelayedComment fills {0} with the Delayed wait in seconds
         private const string CMT_SCR_AutoRespawn2          = "Delayed waits {0} seconds after the last cycler step. Typed values, flag toggles, weapon slot changes, undo, redo, and applying a handling always respawn at once";
+        private const string CMT_SCR_CheckForUpdates       = "Checks GitHub for the latest release per game session, and posts a notification if a newer version is available";
         private const string CMT_SCR_ReassertDriftedFields = "Reapplies any edited field or flag that has been silently reset or overwritten by the game from what you last set it to";
         private const string CMT_SCR_ResetAllSettings      = "Reset script settings to defaults";
         // [Exporting]
@@ -428,8 +441,6 @@ namespace RHE
         private const string CMT_APR_MaxRows1       = "How many item rows are shown in the menu at once";
         private const string CMT_APR_MaxRows2       = "Range: 5-15";
         private const string CMT_APR_MenuPosition   = "Right or Left";
-        // [Experimental]
-        private const string CMT_EXP_LiveSubHandlingData = "Create and delete SubHandlingData live instead of just statically. Requires RageMemoryBridge.asi, falls back to static creation/deletion without it";
         // [Debug]
         private const string CMT_DBG_AlwaysClearLogOnReload = "Clear the log on every script load instead of appending sessions. Disable this whenever you run into a bug or error you want to report and don't want script reloads or game relaunches to wipe the log of any needed info";
         private const string CMT_DBG_LoggingMode            = "Modes: 0 = Warn & Error, 1 = All, 2 = Default + Perf, 3 = Default + Info";
@@ -498,6 +509,18 @@ namespace RHE
         private const string CANCEL_SUBHANDLING_CREATION_EXPORT  = "CancelSubHandlingCreation";
         private const string CANCEL_SUBHANDLING_DELETION_EXPORT  = "CancelSubHandlingDeletion";
         private const string CANCEL_ADVANCEDDATA_CAPACITY_EXPORT = "CancelAdvancedDataCapacity";
+        // The same plugin's export that reads whether its setup finished and succeeded
+        private const string READ_SUBHANDLING_SETUP_STATE_EXPORT = "ReadSubHandlingSetupState";
+
+        // [Identifiers: Update Check] The request for the latest published release and the reply field it reads
+        // The releases endpoint answers with the newest release that is neither a draft nor a prerelease
+        private const string UPDATE_CHECK_URL = "https://api.github.com/repos/KieranBLK/RageHandlingEditor/releases/latest";
+        // The endpoint refuses a request with no User-Agent, which carries this product name and the running version
+        private const string UPDATE_CHECK_USER_AGENT_PRODUCT = "RageHandlingEditor";
+        private const string UPDATE_CHECK_ACCEPT             = "application/vnd.github+json";
+        // The reply's release tag, written as the version after a leading v
+        private const string UPDATE_CHECK_TAG_KEY    = "tag_name";
+        private const string UPDATE_CHECK_TAG_PREFIX = "v";
 
         // [Identifiers: Reload State] Markers and line tags of the reload state file
         // Starts the menu restore section's line that holds Preview's on or off state and position. The menu line starts with a digit
@@ -520,7 +543,7 @@ namespace RHE
         // The not-applied reason for a real array AdvancedData undo or redo on a build whose raw offsets are unsupported
         private const string LIVE_ADVANCED_DATA_UNSUPPORTED_REASON = "this game build does not support AdvancedData edits";
         // The not-applied reason for a SeaPlane deletion refused while a vehicle on its handling is on or near the water
-        private const string SEA_PLANE_NEAR_WATER_REASON = "a vehicle on this handling is on or near the water, which would crash the game";
+        private const string SEA_PLANE_NEAR_WATER_REASON = "a vehicle with this handling is on or near the water, which would crash the game";
 
         // [Identifiers: Keys] Notification keys
         // Notification key of the confirm hint, which is removed the moment the row disarms so it never outlasts the flash
@@ -581,6 +604,7 @@ namespace RHE
         private const string NOTIFICATION_KEY_UNDO_REDO                           = "undo_redo";
         private const string NOTIFICATION_KEY_UNDO_UNAPPLIED                      = "undo_unapplied";
         private const string NOTIFICATION_KEY_UNMOUNT_SELECTED                    = "unmount_selected";
+        private const string NOTIFICATION_KEY_UPDATE_AVAILABLE                    = "update_available";
         private const string NOTIFICATION_KEY_VEHICLE_SEARCH                      = "vehicle_search";
         private const string NOTIFICATION_KEY_WEAPON_FULL                         = "weapon_full";
         private const string NOTIFICATION_KEY_WEAPON_HASH_AMBIGUOUS               = "weapon_hash_ambiguous";
@@ -610,6 +634,11 @@ namespace RHE
         // [Identifiers: Game Assets] Names the game itself defines: Sounds, bones, and its unresolved display name
         // The bone hover mode slides every frame while SF_WORKS_UPSIDE_DOWN is off
         private const string HOVER_SLIDE_BONE_NAME = "misc_e";
+        // The game's vertical flight mode check: This nozzle bone or the 2 named models give a plane the mode beside its flag, and the excluded model never has it
+        private const string VERTICAL_FLIGHT_NOZZLE_BONE_NAME    = "nozzles_f";
+        private const string VERTICAL_FLIGHT_TULA_MODEL_NAME     = "tula";
+        private const string VERTICAL_FLIGHT_RAIJU_MODEL_NAME    = "raiju";
+        private const string VERTICAL_FLIGHT_EXCLUDED_MODEL_NAME = "titan2";
         // The display name the game returns for a model with no gameName in vehicles.meta
         private const string UNRESOLVED_DISPLAY_NAME = "CARNOTFOUND";
         // Frontend sound played with the green unload notification

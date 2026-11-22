@@ -14,7 +14,7 @@ namespace RHE
 {
     public partial class RageHandlingEditor : Script
     {
-        internal const string ScriptVersion = "1.1.1";
+        internal const string ScriptVersion = "1.1.2";
 
         private ObjectPool pool;
         // Set when BuildMenu or the rest of the startup load throws, leaving a half-built instance
@@ -24,11 +24,12 @@ namespace RHE
         public RageHandlingEditor()
         {
             // The logger, the notification feed, and the name resolver come first, since every later step can log, post, or name a vehicle
-            // The tick stages built below bind their methods, so these must exist before them
+            // The tick stages built below bind their methods, so these and the update checker must exist before them
             // The logger reads the feed only when an ERROR logs, so the feed being built on the next line is never too late
             logger = new Logger("scripts\\RageHandlingEditor.log", () => loggingMode, (key, message) => notifications.PostNotificationOnce(key, message));
             notifications = new NotificationFeed(logger, () => uptimeTicks == 0);
             modelNames = new ModelNameResolver(logger);
+            updateChecker = new UpdateChecker(logger, notifications, () => checkForUpdates);
             currentContext = editorContexts[0];
             activeContext = currentContext;
             // Built once so every OnTick frame reuses the same delegate instances instead of allocating fresh ones
@@ -93,6 +94,9 @@ namespace RHE
                 try { InitializePreviewDiffSnapshots(); } catch (Exception ex) { logger.Log(Dbg.Level.Error, Dbg.ConstructorPhaseFailed("InitializePreviewDiffSnapshots", ex.Message)); }
                 reloadState.LoadReloadStateSection(ReloadStateSection.SelectedSlots);
                 reloadState.LoadReloadStateSection(ReloadStateSection.MenuRestore);
+                // A finished check carried by a reload loads first, so the start below skips it and the reloads of one launch never ask again
+                reloadState.LoadReloadStateSection(ReloadStateSection.UpdateCheck);
+                if (checkForUpdates) updateChecker.Start();
                 // Every section above has now loaded, so nothing left can race TrackSeatedVehicle's seat-change effects
                 // Its live Diff capture, auto-merge, and trailer auto-mount are safe to resume from here on
                 startupLoadInProgress = false;

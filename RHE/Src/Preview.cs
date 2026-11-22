@@ -348,7 +348,7 @@ namespace RHE
                         placeholderPool.Add(placeholder);
                     }
                     placeholder.Title = topLevelFieldOrder[i].Title;
-                    placeholder.AltTitle = "";
+                    SetPreviewRowValue(placeholder, "");
                     placeholder.Tag = null;
                     targetMenu.Items.Add(placeholder);
                     placeholderPoolIndex++;
@@ -358,8 +358,15 @@ namespace RHE
                 if (flagFamily != null && flagFamily.ElementCategory == null)
                 {
                     PreviewCategoryData flagData = categoryDataMap[flagFamily.MenuKey];
-                    PopulatePreviewFlagMenuFromEntries(flagData, flagFamily.Entries, field.Value, wireBaseItem != null);
-                    RecalculatePreviewTargetWidth(flagData.Menu);
+                    // A top-level flag menu lists every entry of its family, so once built only its ticks change between saved handlings
+                    // Ticking in place keeps its rows, their layout, and their widths. PopulatePreviewFlagMenuFromEntries only ever appends, so a build clears first
+                    if (flagData.Menu.Items.Count == flagFamily.Entries.Length) TickPreviewFlagRows(flagData, flagFamily.Entries, field.Value);
+                    else
+                    {
+                        ClearPreviewMenu(flagData.Menu);
+                        PopulatePreviewFlagMenuFromEntries(flagData, flagFamily.Entries, field.Value, wireBaseItem != null);
+                        RecalculatePreviewTargetWidth(flagData.Menu);
+                    }
                     flagData.Menu.Name = string.Format(SUBTITLE_FLAGS_TEXT, flagFamily.MenuKey, field.Value, CountTickedFlagRows(ParseFlagHex(field.Value), flagFamily.Entries));
                     flagData.SubmenuItem.Title = flagFamily.MenuKey;
                     targetMenu.Items.Add(flagData.SubmenuItem);
@@ -376,7 +383,7 @@ namespace RHE
                         if (wireBaseItem != null) wireBaseItem(fieldItem);
                     }
                     fieldItem.Title = field.Title;
-                    fieldItem.AltTitle = field.Value;
+                    SetPreviewRowValue(fieldItem, field.Value);
                     fieldItem.Tag = field;
                     targetMenu.Items.Add(fieldItem);
                     basePoolIndex++;
@@ -390,7 +397,7 @@ namespace RHE
         // populateWeaponSlots appends the Weapon category's per-slot submenus after its generic rows
         private void PopulateCategoryRows(Dictionary<string, PreviewCategoryData> categoryDataMap, string categoryKey, NativeMenu categoryMenu, PreviewCategoryData categoryData, List<PreviewField> categoryValue, Action<NativeItem> wireItem, Action<NativeMenu> populateWeaponSlots)
         {
-            categoryMenu.Clear();
+            ClearPreviewMenu(categoryMenu);
             int categoryPoolIndex = 0;
             List<PreviewField> advancedDataRows = null;
             for (int i = 0; i < categoryValue.Count; i++)
@@ -401,7 +408,7 @@ namespace RHE
                     PreviewCategoryData flagCategoryData;
                     if (categoryDataMap.TryGetValue(flagFamily.MenuKey, out flagCategoryData))
                     {
-                        flagCategoryData.Menu.Clear();
+                        ClearPreviewMenu(flagCategoryData.Menu);
                         PopulatePreviewFlagMenuFromEntries(flagCategoryData, flagFamily.Entries, categoryValue[i].Value, wireItem != null);
                         RecalculatePreviewTargetWidth(flagCategoryData.Menu);
                         flagCategoryData.Menu.Name = string.Format(flagFamily.PreviewSubtitleTemplate, categoryValue[i].Value, CountTickedFlagRows(ParseFlagHex(categoryValue[i].Value), flagFamily.Entries));
@@ -428,7 +435,7 @@ namespace RHE
                     if (wireItem != null) wireItem(categoryItem);
                 }
                 categoryItem.Title = categoryValue[i].Title;
-                categoryItem.AltTitle = categoryValue[i].Value;
+                SetPreviewRowValue(categoryItem, categoryValue[i].Value);
                 categoryItem.Tag = categoryValue[i];
                 categoryMenu.Items.Add(categoryItem);
                 categoryPoolIndex++;
@@ -439,7 +446,7 @@ namespace RHE
                 if (categoryDataMap.TryGetValue("AdvancedData", out advancedDataCategoryData))
                 {
                     bool isDiff = categoryDataMap == previewDiffCategoryData;
-                    advancedDataCategoryData.Menu.Clear();
+                    ClearPreviewMenu(advancedDataCategoryData.Menu);
                     // Each row's entry comes from its own ref, and consecutive rows of the same entry fill that entry's own menu
                     int filledEntryIndex = -1;
                     PreviewCategoryData entryData = null;
@@ -453,7 +460,7 @@ namespace RHE
                             filledEntryIndex = entryIndex;
                             advancedDataCategoryData.Menu.Items.Add(EnsurePreviewAdvancedDataEntryMenu(entryIndex, isDiff));
                             entryData = categoryDataMap[PreviewAdvancedDataEntryKey(entryIndex, isDiff)];
-                            entryData.Menu.Clear();
+                            ClearPreviewMenu(entryData.Menu);
                         }
                         int rowIndex = entryData.Menu.Items.Count;
                         NativeItem advancedDataItem;
@@ -466,12 +473,12 @@ namespace RHE
                             if (wireItem != null) wireItem(advancedDataItem);
                         }
                         advancedDataItem.Title = advancedDataRows[i].Title;
-                        advancedDataItem.AltTitle = advancedDataRows[i].Value;
+                        SetPreviewRowValue(advancedDataItem, advancedDataRows[i].Value);
                         advancedDataItem.Tag = advancedDataRows[i];
                         entryData.Menu.Items.Add(advancedDataItem);
                     }
                     if (entryData != null) FinishPreviewAdvancedDataEntry(entryData.Menu);
-                    if (advancedDataCategoryData.Menu.Items.Count > 0) advancedDataCategoryData.Menu.SelectedIndex = 0;
+                    if (advancedDataCategoryData.Menu.Items.Count > 0) SelectPreviewRow(advancedDataCategoryData.Menu, 0);
                     RecalculatePreviewTargetWidth(advancedDataCategoryData.Menu);
                     advancedDataCategoryData.Menu.Name = "AdvancedData";
                     advancedDataCategoryData.SubmenuItem.Title = "AdvancedData";
@@ -484,7 +491,7 @@ namespace RHE
 
         private void FinishPreviewAdvancedDataEntry(NativeMenu entryMenu)
         {
-            if (entryMenu.Items.Count > 0) entryMenu.SelectedIndex = 0;
+            if (entryMenu.Items.Count > 0) SelectPreviewRow(entryMenu, 0);
             RecalculatePreviewTargetWidth(entryMenu);
         }
 
@@ -498,7 +505,7 @@ namespace RHE
         private void FinalizeCategoryPlacement(NativeMenu targetMenu, PreviewCategoryData categoryData, string categoryKey, bool parityEligible, bool onlyOnThisSide, Color tint)
         {
             if (categoryData.Menu.Items.Count == 0) return;
-            categoryData.Menu.SelectedIndex = 0;
+            SelectPreviewRow(categoryData.Menu, 0);
             categoryData.SubmenuItem.Title = categoryKey;
             targetMenu.Items.Add(categoryData.SubmenuItem);
             if (parityEligible) ApplyItemStateColor(categoryData.SubmenuItem, onlyOnThisSide, tint, UnfocusedDiffColor(tint));
@@ -513,7 +520,7 @@ namespace RHE
             for (int i = 0; i < desired; i++)
             {
                 NativeMenu slotMenu = slotMenus[i];
-                slotMenu.Clear();
+                ClearPreviewMenu(slotMenu);
                 slotMenu.Name = string.Format(TITLE_WEAPON_SLOT, (i + 1));
                 List<NativeItem> itemPool = categoryDataMap[string.Format(TITLE_WEAPON_SLOT, (i + 1)) + slotKeySuffix].ItemPool;
                 List<PreviewField> slotFields = slots[i];
@@ -529,11 +536,11 @@ namespace RHE
                         if (wireSlot != null) wireSlot(fieldItem);
                     }
                     fieldItem.Title = slotFields[f].Title;
-                    fieldItem.AltTitle = slotFields[f].Value;
+                    SetPreviewRowValue(fieldItem, slotFields[f].Value);
                     fieldItem.Tag = slotFields[f];
                     slotMenu.Items.Add(fieldItem);
                 }
-                if (slotMenu.Items.Count > 0) slotMenu.SelectedIndex = 0;
+                if (slotMenu.Items.Count > 0) SelectPreviewRow(slotMenu, 0);
                 RecalculatePreviewTargetWidth(slotMenu);
                 slotSubmenuItems[i].Title = string.Format(TITLE_WEAPON_SLOT, (i + 1));
                 weaponMenu.Items.Add(slotSubmenuItems[i]);
@@ -550,6 +557,34 @@ namespace RHE
 
         // Repopulates the Preview panel from the currently highlighted saved handling
         private void RefreshPreviewMenu() { RefreshPreviewMenu(cachedSavedHandlingKeys); }
+
+        // The library's value text setter lays the row out again and measures the text through the game, once per row on every rebuild
+        // Writing the row's text element directly skips that, and every menu whose rows change is laid out once by its row select afterward
+        // That layout covers only the rows on screen, and a scroll lays out the rows it brings into view
+        private void SetPreviewRowValue(NativeItem item, string value)
+        {
+            LemonUI.Elements.ScaledText valueText = ItemAltTitleField != null ? ItemAltTitleField.GetValue(item) as LemonUI.Elements.ScaledText : null;
+            if (valueText == null) item.AltTitle = value;
+            else if (valueText.Text != value) valueText.Text = value;
+        }
+
+        // Menus cleared since their last row select, so their new rows still need the select's layout
+        private readonly HashSet<NativeMenu> previewMenusNeedingLayout = new HashSet<NativeMenu>();
+
+        private void ClearPreviewMenu(NativeMenu menu)
+        {
+            menu.Clear();
+            previewMenusNeedingLayout.Add(menu);
+        }
+
+        // The library's row select lays the whole menu out again even when the row does not change
+        // A menu whose rows are unchanged and whose row is already the one asked for is left as it is
+        private void SelectPreviewRow(NativeMenu menu, int index)
+        {
+            if (!previewMenusNeedingLayout.Remove(menu) && menu.SelectedIndex == index) return;
+            menu.SelectedIndex = index;
+        }
+
         private void RefreshPreviewMenu(SavedHandlingKey[] savedHandlings)
         {
             // Before the hide below, since the position walks up from the visible category menu
@@ -562,15 +597,9 @@ namespace RHE
             if (previouslyVisiblePreviewMenu != null && previouslyVisiblePreviewMenu != previewMenu) HidePreviewPanelForRefresh(previouslyVisiblePreviewMenu);
             // A result is built from the model's live handling, so every refresh reads it fresh instead of reusing an earlier parse
             if (browsedSource == searchSource) searchPreviewCache.Clear();
-            previewMenu.Clear();
-            // PopulatePreviewFlagMenuFromEntries only ever appends, so the 3 top-level flag categories need this clear
-            // Every other previewCategoryData entry clears lazily, only when its own field values changed from the previous saved handling
-            // That covers the render-order categories and the menus nested inside them (AdvancedFlags, AdvancedData, SpecialFlightFlags)
-            for (int i = 0; i < PreviewFlagFieldNames.Length; i++)
-            {
-                PreviewCategoryData flagCategoryData;
-                if (previewCategoryData.TryGetValue(PreviewFlagFieldNames[i], out flagCategoryData)) flagCategoryData.Menu.Clear();
-            }
+            ClearPreviewMenu(previewMenu);
+            // Every previewCategoryData entry clears lazily, only when its own values changed from the previous saved handling
+            // That covers the 3 top-level flag categories, the render-order categories, and the menus nested inside them (AdvancedFlags, AdvancedData, SpecialFlightFlags)
             int savedHandlingIndex = savedHandlingsMenu.SelectedIndex - SavedHandlingRowOffset;
             if (!navigation.PreviewWanted || savedHandlingIndex < 0 || savedHandlingIndex >= savedHandlings.Length)
             {
@@ -585,10 +614,12 @@ namespace RHE
             List<PreviewField> fields = GetHandlingPreviewCache(savedKey).Fields;
             // Row-count parity: Both panels must show one row per top-level field and per sub-handling or Weapon category that exists on *either* side
             // That keeps the passive index-based mirror from drifting
-            // The baseline is resolved and parsed once here, before any row is built, and handed to RefreshPreviewDiff below
+            // The baseline and its cached parse are resolved once here, before any row is built, and handed to RefreshPreviewDiff below
             // Search results have no Diff, since a result is a model to browse and copy from, not a saved handling to compare with the vehicle's original handling
             XDocument parityBaseline = showPreviewDiff && savedKey.Source.Has(SavedHandlingCapabilities.Diff) ? ResolvePreviewDiffSnapshot(savedKey) : null;
-            List<PreviewField> baselineFields = parityBaseline != null ? BuildFullFieldListFromDocument(parityBaseline) : null;
+            PreviewDiffBaselineParse baselineParse = parityBaseline != null ? GetPreviewDiffBaselineParse(parityBaseline) : null;
+            List<PreviewField> baselineFields = baselineParse != null ? baselineParse.Fields : null;
+            List<List<PreviewField>> baselineWeaponSlots = baselineParse != null ? baselineParse.WeaponSlots : null;
             List<PreviewField> topLevelFieldOrder = BuildTopLevelFieldOrder(fields, baselineFields);
             Dictionary<string, List<PreviewField>> categoryFields = BuildCategoryFieldsAndBaseRows(fields, previewCategoryData, previewMenu, previewItemPool, WireSelectiveCopy, topLevelFieldOrder, previewBasePlaceholderPool, DIFF_PREVIEW_COLOR, "");
             // Hoisted to method scope so RefreshPreviewDiff and SyncPreviewDiffColoring reuse the same parse instead of reparsing the file from disk a second time
@@ -614,7 +645,7 @@ namespace RHE
                     AddParityPlaceholderIfNeeded(previewMenu, categoryData, parityEligible, haveCategoryData, diffActiveForParity && baselineCategoryKeys.Contains(categoryKey));
                     // Only clear on the actual present-to-absent transition (the dictionary held a last-rendered snapshot to remove)
                     // A category already absent on the previous call has nothing left to clear, so a run of consecutive saved handlings all lacking it costs nothing here
-                    if (haveCategoryData && previewCategoryLastFields.Remove(categoryKey)) categoryData.Menu.Clear();
+                    if (haveCategoryData && previewCategoryLastFields.Remove(categoryKey)) ClearPreviewMenu(categoryData.Menu);
                     continue;
                 }
                 if (!haveCategoryData) continue;
@@ -642,9 +673,9 @@ namespace RHE
             }
             PreviewPosition rememberedPosition;
             previewPositionBySavedHandling.TryGetValue(savedKey, out rememberedPosition);
-            if (previewMenu.Items.Count > 0) previewMenu.SelectedIndex = rememberedPosition != null ? Math.Max(0, Math.Min(rememberedPosition.TopRow, previewMenu.Items.Count - 1)) : 0;
+            if (previewMenu.Items.Count > 0) SelectPreviewRow(previewMenu, rememberedPosition != null ? Math.Max(0, Math.Min(rememberedPosition.TopRow, previewMenu.Items.Count - 1)) : 0);
             RecalculatePreviewTargetWidth(previewMenu);
-            RefreshPreviewDiff(fields, weaponSlotsThisRefresh, parityBaseline, baselineFields, topLevelFieldOrder);
+            RefreshPreviewDiff(fields, weaponSlotsThisRefresh, parityBaseline, baselineFields, baselineWeaponSlots, topLevelFieldOrder);
             // After RefreshPreviewDiff, not before: It repopulates the Diff tree's items, which this call then dims in step with Preview's own focus state
             SyncPreviewEnabled();
             RepositionPreviewMenu();
@@ -704,7 +735,16 @@ namespace RHE
                 checkbox.Checked = (flags & (1u << entries[i].BitIndex)) != 0;
                 data.Menu.Items.Add(checkbox);
             }
-            if (data.Menu.Items.Count > 0) data.Menu.SelectedIndex = 0;
+            if (data.Menu.Items.Count > 0) SelectPreviewRow(data.Menu, 0);
+        }
+
+        // Each checkbox's index in CheckboxPool is its entry's index, as PopulatePreviewFlagMenuFromEntries built them
+        // Only the highlight returns to the top, as a rebuilt menu's would
+        private void TickPreviewFlagRows(PreviewCategoryData data, FlagNameEntry[] entries, string hexValue)
+        {
+            uint flags = ParseFlagHex(hexValue);
+            for (int i = 0; i < entries.Length; i++) data.CheckboxPool[i].Checked = (flags & (1u << entries[i].BitIndex)) != 0;
+            SelectPreviewRow(data.Menu, 0);
         }
 
         // Checkbox rows never go through the real Enabled toggle below, because NativeCheckboxItem's constructor wires Activated to flip Checked internally
@@ -899,8 +939,8 @@ namespace RHE
         }
 
         // A lookup miss simply leaves Diff hidden, with no error state
-        // RefreshPreviewMenu resolves the baseline and parses its field list, so baselineFields is null exactly when baseline is
-        private void RefreshPreviewDiff(List<PreviewField> previewFields, List<List<PreviewField>> previewWeaponSlots, XDocument baseline, List<PreviewField> baselineFields, List<PreviewField> topLevelFieldOrder)
+        // RefreshPreviewMenu resolves the baseline and its cached parse, so baselineFields and baselineWeaponSlots are null exactly when baseline is
+        private void RefreshPreviewDiff(List<PreviewField> previewFields, List<List<PreviewField>> previewWeaponSlots, XDocument baseline, List<PreviewField> baselineFields, List<List<PreviewField>> baselineWeaponSlots, List<PreviewField> topLevelFieldOrder)
         {
             if (baseline == null)
             {
@@ -911,8 +951,6 @@ namespace RHE
                 SyncPreviewDiffColoring(previewFields, previewWeaponSlots, null, new List<PreviewField>(), new List<List<PreviewField>>());
                 return;
             }
-            // Derived once and threaded into every downstream consumer, rather than each re-parsing the same baseline document
-            List<List<PreviewField>> baselineWeaponSlots = BuildWeaponPreviewSlotsFromDocument(baseline);
             // Diff needs the categories Preview is showing to place its red placeholders and colors
             // previewFields is the flat list Preview rendered from, so its category-key set is Preview's present set without re-parsing the saved handling
             PopulateDiffMenu(baselineFields, baselineWeaponSlots, ExtractCategoryKeys(previewFields), topLevelFieldOrder);
@@ -928,16 +966,10 @@ namespace RHE
         // This mirrors RefreshPreviewMenu's population against the live saved handling, so the two trees stay in lockstep for SyncDiffMirror's passive navigation
         private void PopulateDiffMenu(List<PreviewField> baselineFields, List<List<PreviewField>> baselineWeaponSlots, HashSet<string> handlingCategoryKeys, List<PreviewField> topLevelFieldOrder)
         {
-            diffMenu.Clear();
+            ClearPreviewMenu(diffMenu);
             diffBaselineOnlyCategoryRows.Clear();
-            // PopulatePreviewFlagMenuFromEntries only ever appends, so the 3 top-level flag categories need this clear
-            // Every other previewDiffCategoryData entry clears lazily, only when its own field values changed from the previous baseline
-            // That covers the render-order categories and the menus nested inside them (AdvancedFlags, AdvancedData, SpecialFlightFlags)
-            for (int i = 0; i < PreviewFlagFieldNames.Length; i++)
-            {
-                PreviewCategoryData flagCategoryData;
-                if (previewDiffCategoryData.TryGetValue(PreviewFlagFieldNames[i], out flagCategoryData)) flagCategoryData.Menu.Clear();
-            }
+            // Every previewDiffCategoryData entry clears lazily, only when its own values changed from the previous baseline
+            // That covers the 3 top-level flag categories, the render-order categories, and the menus nested inside them (AdvancedFlags, AdvancedData, SpecialFlightFlags)
             Dictionary<string, List<PreviewField>> categoryFields = BuildCategoryFieldsAndBaseRows(baselineFields, previewDiffCategoryData, diffMenu, diffItemPool, null, topLevelFieldOrder, diffBasePlaceholderPool, DIFF_BASELINE_COLOR, PLACEHOLDER_DIFF_NOT_PRESENT);
             string weaponLongName = ResolveCategoryDefinition(CATEGORY_WEAPON).LongName;
             for (int categoryIndex = 0; categoryIndex < PreviewCategoryRenderOrder.Length; categoryIndex++)
@@ -953,7 +985,7 @@ namespace RHE
                     AddParityPlaceholderIfNeeded(diffMenu, categoryData, parityEligible, haveCategoryData, handlingCategoryKeys.Contains(categoryKey));
                     // Only clear on the actual present-to-absent transition (the dictionary held a last-rendered snapshot to remove)
                     // A baseline already absent on the previous call has nothing left to clear, so a run of consecutive baselines all lacking it costs nothing here
-                    if (haveCategoryData && previewDiffCategoryLastFields.Remove(categoryKey)) categoryData.Menu.Clear();
+                    if (haveCategoryData && previewDiffCategoryLastFields.Remove(categoryKey)) ClearPreviewMenu(categoryData.Menu);
                     continue;
                 }
                 if (!haveCategoryData) continue;
@@ -979,7 +1011,7 @@ namespace RHE
                 FinalizeCategoryPlacement(diffMenu, categoryData, categoryKey, parityEligible, baselineOnly, DIFF_BASELINE_COLOR);
                 if (parityEligible && baselineOnly && categoryData.Menu.Items.Count > 0) diffBaselineOnlyCategoryRows.Add(categoryData.SubmenuItem);
             }
-            if (diffMenu.Items.Count > 0) diffMenu.SelectedIndex = Math.Max(0, Math.Min(diffMenu.SelectedIndex, diffMenu.Items.Count - 1));
+            if (diffMenu.Items.Count > 0) SelectPreviewRow(diffMenu, Math.Max(0, Math.Min(diffMenu.SelectedIndex, diffMenu.Items.Count - 1)));
             RecalculatePreviewTargetWidth(diffMenu);
         }
 

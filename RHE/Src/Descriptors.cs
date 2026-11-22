@@ -87,7 +87,7 @@ namespace RHE
                 DescriptorRow("BrakeBiasFront", "Share of BrakeForce on each axle. 1.0 = Front, 0.0 = Rear. Effectiveness influenced by TractionBiasFront"),
                 DescriptorRow("HandbrakeForce", "Max force per unit of weight applied to the rear and middle wheels when handbraking, also cuts ABS and DriveForce. Eases to half strength over about a second while held. Effectiveness influenced by TractionCurves/Bias"),
             });
-            AddCategory(compiled, "Steering", new[] { DescriptorRow("SteeringLock", "Maximum steering angle in degrees. Effectiveness influenced by TractionCurves/Bias"), });
+            AddCategory(compiled, "Steering", new[] { DescriptorRow("SteeringLock", "Maximum steering angle in degrees. Effectiveness influenced by TractionCurves/Bias. Ignored by NPCs, it's hardcoded for them"), });
             AddCategory(compiled, "Traction", new[]
             {
                 DescriptorRow("TractionCurveMax", "Peak grip when the tire is not slipping. Also defines the bike burnout spin torque"),

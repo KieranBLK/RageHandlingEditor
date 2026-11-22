@@ -110,27 +110,34 @@ namespace RHE
         // With live deletion on, a live category the game never reads as required is removed from the running game
         // Every other press keeps the exclusion from the next save, which also covers a plugin that is missing or refuses
         // A category already excluded is included back instead, since that press undoes the exclusion
+        // While a live request on the handling still waits the press does nothing, so a Car deletion and an AdvancedData growth never reach the plugin together
         private void DeleteLiveCategoryOrExclude(EditorContext context, string category)
         {
             Vehicle vehicle = context.TargetVehicle;
             HashSet<string> toggledSet;
             bool excluded = !Entity.IsNullOrNotExisting(vehicle) && pendingSubDataToggle.TryGetValue(ResolveHandlingKey(vehicle), out toggledSet) && toggledSet.Contains(category);
-            bool refusedLiveDeletion = false;
+            string exclusionToast = null;
             if (!excluded && !Entity.IsNullOrNotExisting(vehicle) && vehicle.HandlingData.IsValid)
             {
-                // A refused SeaPlane deletion never falls back to the exclusion, since the player has to move the vehicle and press again
-                if (category == CATEGORY_SEA_PLANE && IsLiveDeletionAllowedFor(LiveRequestOrigin.Player, category, vehicle) && IsAnyVehicleOnHandlingOnOrNearWater(ResolveHandlingKey(vehicle)))
+                if (HasPendingLiveRequest(ResolveHandlingKey(vehicle)))
                 {
-                    logger.Log(Dbg.Level.Info, Dbg.LiveSubDataDeletionFailed(modelNames.ResolveModelName(vehicle), vehicle.Model.Hash, category, SEA_PLANE_NEAR_WATER_REASON));
-                    notifications.Notify(NOTIFICATION_KEY_PREFIX_LIVE_SUBDATA + category, NOTIF_SEA_PLANE_DELETE_IN_WATER);
+                    logger.Log(Dbg.Level.Info, Dbg.LiveSubDataDeleteWaiting(category));
                     return;
                 }
                 string reason;
                 if (BeginLiveCategoryDeletion(context, category, vehicle, null, LiveRequestOrigin.Player, out reason)) return;
-                // Live deletion was on offer but the game reads this category as required, so the toast says why it only excludes
-                refusedLiveDeletion = IsLiveCreationOffered(category, vehicle.Type) && IsLiveDeletionRefused(category, vehicle);
+                // A refused SeaPlane deletion never falls back to the exclusion, since the player has to move the vehicle and press again
+                if (reason == SEA_PLANE_NEAR_WATER_REASON)
+                {
+                    logger.Log(Dbg.Level.Info, Dbg.LiveSubDataDeletionFailed(modelNames.ResolveModelName(vehicle), vehicle.Model.Hash, category, reason));
+                    notifications.Notify(NOTIFICATION_KEY_PREFIX_LIVE_SUBDATA + category, NOTIF_SEA_PLANE_DELETE_IN_WATER);
+                    return;
+                }
+                // Live deletion was on offer but a vehicle needs this category, so the toast says why it only excludes
+                if (reason == REASON_SHARED_REQUIRED) exclusionToast = NOTIF_LIVE_CATEGORY_SHARED_EXCLUDED;
+                else if (reason == REASON_REQUIRED_CATEGORY && IsLiveCreationOffered(category, vehicle)) exclusionToast = NOTIF_LIVE_CATEGORY_REQUIRED_EXCLUDED;
             }
-            ToggleSubDataExclusion(context, category, refusedLiveDeletion);
+            ToggleSubDataExclusion(context, category, exclusionToast);
         }
 
         private void ConfirmOverwriteHandling()
@@ -155,7 +162,8 @@ namespace RHE
             ForgetPhantomScrollPosition(handling, category);
         }
 
-        private void ToggleSubDataExclusion(EditorContext context, string category, bool refusedLiveDeletion)
+        // refusedDeletionToast is the toast template a refused live deletion posts in place of the plain exclusion one, and null for every other press
+        private void ToggleSubDataExclusion(EditorContext context, string category, string refusedDeletionToast)
         {
             Vehicle vehicle = context.TargetVehicle;
             if (Entity.IsNullOrNotExisting(vehicle)) return;
@@ -177,7 +185,7 @@ namespace RHE
                 // Present: Toggled means excluded. Absent (a created phantom category being reverted): Toggled means removed again
                 string message;
                 if (isPresent && !nowToggled) message = string.Format(NOTIF_CATEGORY_INCLUDED, category);
-                else if (isPresent && refusedLiveDeletion) message = string.Format(NOTIF_LIVE_CATEGORY_REQUIRED_EXCLUDED, category);
+                else if (isPresent && refusedDeletionToast != null) message = string.Format(refusedDeletionToast, category);
                 else if (isPresent) message = string.Format(NOTIF_CATEGORY_EXCLUDED, category);
                 else if (nowToggled) message = string.Format(NOTIF_CATEGORY_WILL_BE_CREATED, category);
                 else message = string.Format(NOTIF_CATEGORY_REMOVED, category);

@@ -57,6 +57,7 @@ namespace RHE
         }
 
         // Null when there is no Active vehicle, after the toast and the red flash on flashItem
+        // Also null, silently, while a live request on the handling waits, since a copy could then write into a category the plugin made but the script has not filled
         private SelectiveCopyRun BeginSelectiveCopyRun(NativeItem flashItem)
         {
             EditorContext target = activeContext;
@@ -67,7 +68,13 @@ namespace RHE
                 StartResultFlash(flashItem, Color.Red);
                 return null;
             }
-            return new SelectiveCopyRun { Target = target, Vehicle = vehicle, Handling = vehicle.HandlingData, HandlingKey = ResolveHandlingKey(vehicle) };
+            HandlingKey key = ResolveHandlingKey(vehicle);
+            if (HasPendingLiveRequest(key))
+            {
+                logger.Log(Dbg.Level.Info, Dbg.SelectiveCopyWaiting());
+                return null;
+            }
+            return new SelectiveCopyRun { Target = target, Vehicle = vehicle, Handling = vehicle.HandlingData, HandlingKey = key };
         }
 
         // A category the vehicle lacks is created first, live when live creation is offered on the vehicle's type and otherwise as a phantom category
@@ -76,8 +83,8 @@ namespace RHE
         {
             if (run.CreatedCategories.ContainsKey(category)) return true;
             if (IsCategoryPresent(run.Handling, category)) return false;
-            if (Array.IndexOf(GetSubDataCreationCandidates(run.Vehicle.Type, run.Vehicle.ClassType), category) < 0) return false;
-            if (IsLiveCreationOffered(category, run.Vehicle.Type) && FindPendingLiveRequest(run.HandlingKey, LiveRequestKind.Creation, category) == null)
+            if (Array.IndexOf(GetSubDataCreationCandidates(run.Vehicle), category) < 0) return false;
+            if (IsLiveCreationOffered(category, run.Vehicle))
             {
                 // A fresh default replaces any element stored earlier, so no old values leak into the new category
                 CategoryDefinition definition = ResolveCategoryDefinition(category);
@@ -110,12 +117,21 @@ namespace RHE
 
         // Each live-route category is requested once the rows are written, and the plugin's answer applies the copied element and pushes the creation's one undo entry
         // A request the plugin cannot take creates the export-only category from the same element instead
+        // A category leaves the list only once handled, so a throw leaves just the unhandled ones for DiscardUnrequestedCopyCreations
         private void RequestSelectiveCopyCreations(SelectiveCopyRun run)
         {
-            foreach (string category in run.LiveRouteCategories)
+            while (run.LiveRouteCategories.Count > 0)
             {
+                string category = run.LiveRouteCategories[0];
                 if (!BeginLiveCategoryCreation(run.Target, category, run.Vehicle, LiveRequestOrigin.Player)) ActivatePhantomCategory(run.Target, category);
+                run.LiveRouteCategories.RemoveAt(0);
             }
+        }
+
+        // The element stored for a live-route category waits for its request, so a run that throws first must not leave it for a later creation to seed from
+        private void DiscardUnrequestedCopyCreations(SelectiveCopyRun run)
+        {
+            foreach (string category in run.LiveRouteCategories) RemoveStoredCategoryElement(run.HandlingKey, category);
             run.LiveRouteCategories.Clear();
         }
 
@@ -377,7 +393,12 @@ namespace RHE
         {
             SelectiveCopyRun run = BeginSelectiveCopyRun(sourceItem);
             if (run == null) return;
-            FinishSelectiveCopyRow(sourceItem, CopySelectiveField(run, field, fieldKey), run, fieldKey);
+            try { FinishSelectiveCopyRow(sourceItem, CopySelectiveField(run, field, fieldKey), run, fieldKey); }
+            catch
+            {
+                DiscardUnrequestedCopyCreations(run);
+                throw;
+            }
         }
 
         // A null category on the field's ref means a base field, which is always live present
@@ -564,7 +585,12 @@ namespace RHE
         {
             SelectiveCopyRun run = BeginSelectiveCopyRun(sourceItem);
             if (run == null) return;
-            FinishSelectiveCopyRow(sourceItem, CopySelectiveWeaponField(run, field, fieldKey), run, fieldKey);
+            try { FinishSelectiveCopyRow(sourceItem, CopySelectiveWeaponField(run, field, fieldKey), run, fieldKey); }
+            catch
+            {
+                DiscardUnrequestedCopyCreations(run);
+                throw;
+            }
         }
 
         // Old-value resolution and the live-category presence check both go through the weapon-specific per-slot data
@@ -746,18 +772,26 @@ namespace RHE
             var clearedFlags = new List<string>();
             string flagName;
             string fieldKey;
-            SelectiveCopyOutcome outcome = ResolveRunOutcome(run, CopySelectiveFlagCheckbox(run, checkbox, previewFlagCategory, data, true, clearedFlags, out flagName, out fieldKey));
-            if (outcome == SelectiveCopyOutcome.Applied)
+            try
             {
-                FinishSelectiveCopyRun(run);
-                StartResultFlash(checkbox, Color.LightGreen);
-                ReportFlagCopied(flagName, fieldKey, clearedFlags);
+                SelectiveCopyOutcome outcome = ResolveRunOutcome(run, CopySelectiveFlagCheckbox(run, checkbox, previewFlagCategory, data, true, clearedFlags, out flagName, out fieldKey));
+                if (outcome == SelectiveCopyOutcome.Applied)
+                {
+                    FinishSelectiveCopyRun(run);
+                    StartResultFlash(checkbox, Color.LightGreen);
+                    ReportFlagCopied(flagName, fieldKey, clearedFlags);
+                }
+                else if (outcome == SelectiveCopyOutcome.Identical) SelectiveCopyIdentical(checkbox, fieldKey);
+                else
+                {
+                    RequestSelectiveCopyCreations(run);
+                    SelectiveCopyFailed(checkbox, outcome);
+                }
             }
-            else if (outcome == SelectiveCopyOutcome.Identical) SelectiveCopyIdentical(checkbox, fieldKey);
-            else
+            catch
             {
-                RequestSelectiveCopyCreations(run);
-                SelectiveCopyFailed(checkbox, outcome);
+                DiscardUnrequestedCopyCreations(run);
+                throw;
             }
         }
 
@@ -882,6 +916,11 @@ namespace RHE
             var tally = new SelectiveCopyTally();
             BeginUndoGroup();
             try { CopySelectiveMenuRows(run, categoryItem.Menu, tally); }
+            catch
+            {
+                DiscardUnrequestedCopyCreations(run);
+                throw;
+            }
             finally { EndUndoGroup(); }
             FinishSelectiveCopyRun(run);
             string categoryName = categoryItem.Title;
